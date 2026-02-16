@@ -2,7 +2,7 @@ Welcome to the EchoVR texture editor,
 
 App is now easy and simple to use, click tutorial in top left if you get stuck.
 
-Any questions message @he_is_the_cat on discord and special thanks to Exhibitmark for creating the original extraction tool and Goopsie for making it easier to use.
+Any questions message @he_is_the_cat on discord and special thanks to Exhibitmark for creating the original extraction tool and Goopsie for making his tool which is a version of Carnation called evrFileTools it made it easier to use and links below are for both.
 
 [Carnation](https://github.com/Exhibitmark/carnation) Made by Exhibitmark and
 
