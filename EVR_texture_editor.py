@@ -188,36 +188,41 @@ class TextureCacheManager:
     @staticmethod
     def get_cached_files(folder_path):
         cache = TextureCacheManager.load_cache()
-        return cache.get(folder_path)
+        if not cache: return None
+        
+        norm_path = os.path.normpath(folder_path).lower()
+        for key in cache:
+            if os.path.normpath(key).lower() == norm_path:
+                return cache[key]
+        return None
 
     @staticmethod
     def update_cache(folder_path, file_list):
         cache = TextureCacheManager.load_cache()
-        cache[folder_path] = file_list
+        cache[os.path.normpath(folder_path)] = file_list
         TextureCacheManager.save_cache(cache)
 
 class ConfigManager:
     @staticmethod
     def load_config():
         base_dir = get_base_dir()
+        settings_dir = os.path.join(base_dir, SETTINGS_DIR_NAME)
+        
+        if not os.path.exists(settings_dir):
+            try:
+                os.makedirs(settings_dir)
+            except: pass
         
         default_config = {
             'output_folder': None,
             'data_folder': None,
-            'extracted_folder': None,
-            'repacked_folder': os.path.join(base_dir, "output-both"),
-            'pcvr_input_folder': os.path.join(base_dir, "input-pcvr"),
-            'quest_input_folder': os.path.join(base_dir, "input-quest"),
+            'extracted_folder': os.path.join(settings_dir, "pcvr-extracted"),
+            'repacked_folder': os.path.join(settings_dir, "output-both"),
+            'pcvr_input_folder': os.path.join(settings_dir, "input-pcvr"),
+            'quest_input_folder': os.path.join(settings_dir, "input-quest"),
             'backup_folder': None,
             'renderdoc_path': None
         }
-        
-        parent_dir = os.path.dirname(base_dir)
-        for folder_key in ['repacked_folder', 'pcvr_input_folder', 'quest_input_folder']:
-            if not os.path.exists(default_config[folder_key]):
-                parent_path = os.path.join(parent_dir, os.path.basename(default_config[folder_key]))
-                if os.path.exists(parent_path):
-                    default_config[folder_key] = parent_path
         
         try:
             if os.path.exists(CONFIG_FILE):
@@ -628,6 +633,7 @@ Always create a backup before proceeding."""
     def on_backup_complete(self, success, result):
         if success:
             ConfigManager.save_config(backup_folder=result)
+            self.config['backup_folder'] = result
             self.backup_location = result
             self.refresh_backup_status()
             self.log_info(f"✓ Backup created: {result}")
@@ -1753,8 +1759,8 @@ class EchoVRTextureViewer:
     def __init__(self, root):
         self.root = root
         self.root.title("EchoVR Texture Editor - PCVR & Quest Support")
-        self.root.geometry("1400x900")
-        self.root.minsize(1200, 800)
+        self.root.geometry("1200x800")
+        self.root.minsize(800, 600)
         
         self.colors = {
             'bg_dark': '#0a0a0a', 'bg_medium': '#1a1a1a', 'bg_light': '#2a2a2a',
@@ -1788,6 +1794,7 @@ class EchoVRTextureViewer:
         self.filtered_textures = []
         self.is_downloading = False
         
+        self.ensure_settings_folders()
         self.setup_ui()
         self.auto_detect_folders()
         
@@ -1797,35 +1804,45 @@ class EchoVRTextureViewer:
             self.set_data_folder(self.data_folder)
         if self.extracted_folder and os.path.exists(self.extracted_folder):
             self.set_extracted_folder(self.extracted_folder)
+            
+        # Save defaults to config if they were missing
+        ConfigManager.save_config(**self.config)
+    
+    def ensure_settings_folders(self):
+        base_dir = get_base_dir()
+        settings_dir = os.path.join(base_dir, SETTINGS_DIR_NAME)
+        
+        folders = [
+            "input-pcvr", "input-quest", 
+            "pcvr-extracted", "quest-extracted", 
+            "output-both", "texture_cache"
+        ]
+        
+        for folder in folders:
+            path = os.path.join(settings_dir, folder)
+            if not os.path.exists(path):
+                try:
+                    os.makedirs(path)
+                except: pass
     
     def auto_detect_folders(self):
-        if getattr(sys, 'frozen', False):
-            application_path = os.path.dirname(sys.executable)
-            parent_dir = os.path.dirname(application_path)
-        else:
-            application_path = os.path.dirname(os.path.abspath(__file__))
-            parent_dir = os.path.dirname(application_path)
+        base_dir = get_base_dir()
+        settings_dir = os.path.join(base_dir, SETTINGS_DIR_NAME)
         
-        for base_dir in [application_path, parent_dir]:
-            pcvr_folder = os.path.join(base_dir, "input-pcvr")
-            if os.path.exists(pcvr_folder):
-                self.pcvr_input_folder = pcvr_folder
-                self.log_info(f"Auto-detected PCVR input folder: {pcvr_folder}")
-                break
+        pcvr_folder = os.path.join(settings_dir, "input-pcvr")
+        if os.path.exists(pcvr_folder):
+            self.pcvr_input_folder = pcvr_folder
+            self.log_info(f"Auto-detected PCVR input folder: {pcvr_folder}")
             
-        for base_dir in [application_path, parent_dir]:
-            quest_folder = os.path.join(base_dir, "input-quest")
-            if os.path.exists(quest_folder):
-                self.quest_input_folder = quest_folder
-                self.log_info(f"Auto-detected Quest input folder: {quest_folder}")
-                break
+        quest_folder = os.path.join(settings_dir, "input-quest")
+        if os.path.exists(quest_folder):
+            self.quest_input_folder = quest_folder
+            self.log_info(f"Auto-detected Quest input folder: {quest_folder}")
         
-        for base_dir in [application_path, parent_dir]:
-            output_both = os.path.join(base_dir, "output-both")
-            if os.path.exists(output_both):
-                self.repacked_folder = output_both
-                self.log_info(f"Auto-detected output-both folder: {output_both}")
-                break
+        output_both = os.path.join(settings_dir, "output-both")
+        if os.path.exists(output_both):
+            self.repacked_folder = output_both
+            self.log_info(f"Auto-detected output-both folder: {output_both}")
     
     def setup_ui(self):
         self.root.columnconfigure(0, weight=1)
@@ -2069,6 +2086,7 @@ class EchoVRTextureViewer:
             self.log_info("✗ Could not find manifests and packages folders")
         
         ConfigManager.save_config(data_folder=self.data_folder)
+        self.config['data_folder'] = self.data_folder
         self.update_evr_buttons_state()
     
     def select_extracted_folder(self):
@@ -2082,6 +2100,7 @@ class EchoVRTextureViewer:
         self.set_output_folder(path)
         self.update_evr_buttons_state()
         ConfigManager.save_config(extracted_folder=self.extracted_folder)
+        self.config['extracted_folder'] = self.extracted_folder
         self.log_info(f"✓ Extracted folder set: {path}")
     
     PACKAGE_TEXTURES = "48037dc70b0ecab2"
@@ -2410,6 +2429,7 @@ class EchoVRTextureViewer:
             self.log_info(f"Output folder set: {path} ({platform_text})")
             self.load_textures()
             ConfigManager.save_config(output_folder=self.output_folder)
+            self.config['output_folder'] = self.output_folder
             self.update_quest_push_button()
     
     def filter_textures(self, event=None):
@@ -2440,6 +2460,37 @@ class EchoVRTextureViewer:
         self.root.update_idletasks()
         threading.Thread(target=self._load_textures_worker, daemon=True).start()
 
+    def _is_valid_texture_file(self, file_path):
+        try:
+            if not os.path.isfile(file_path): return False
+            size = os.path.getsize(file_path)
+            if size == 0: return False
+
+            if not self.is_pcvr_textures and not self.is_quest_textures:
+                return True
+
+            with open(file_path, 'rb') as f:
+                header = f.read(16)
+
+            if self.is_pcvr_textures:
+                return header.startswith(b'DDS ')
+            
+            if self.is_quest_textures:
+                if header.startswith(b'\x13\xAB\xA1\x5C'): return True
+                if header.startswith(b'\xABKTX 11') or header.startswith(b'\xABKTX 20'): return True
+                if b'BcBP' in header: return True
+                if header.startswith(b'PVR'): return True
+                
+                if size % 16 == 0:
+                    if header.strip().startswith(b'{') or header.strip().startswith(b'<'):
+                        return False
+                    return True
+                return False
+                
+            return True
+        except:
+            return False
+
     def _load_textures_worker(self):
         if not self.textures_folder or not os.path.exists(self.textures_folder):
              self.root.after(0, lambda: self._on_textures_loaded([], 0))
@@ -2453,10 +2504,11 @@ class EchoVRTextureViewer:
         valid_files = []
         try:
             with os.scandir(self.textures_folder) as it:
-                valid_files = [e.name for e in it if e.is_file()]
-            existing = TextureCacheManager.get_cached_files(self.textures_folder)
-            if existing is None or existing != valid_files:
-                TextureCacheManager.update_cache(self.textures_folder, valid_files)
+                for e in it:
+                    if e.is_file() and self._is_valid_texture_file(e.path):
+                        valid_files.append(e.name)
+            
+            TextureCacheManager.update_cache(self.textures_folder, valid_files)
             self.root.after(0, lambda: self._on_textures_loaded(valid_files, len(valid_files)))
         except Exception as e:
             print(f"Scan Error: {e}")
@@ -2822,6 +2874,22 @@ class EchoVRTextureViewer:
 
 def main():
     root = tk.Tk()
+
+    # Set app icon
+    icon_path = os.path.join(get_base_dir(), "icon.ico")
+    
+    # Check if running as PyInstaller bundle (onefile) where resources are in _MEIPASS
+    if hasattr(sys, '_MEIPASS'):
+        bundled_icon = os.path.join(sys._MEIPASS, "icon.ico")
+        if os.path.exists(bundled_icon):
+            icon_path = bundled_icon
+            
+    if os.path.exists(icon_path):
+        try:
+            root.iconbitmap(icon_path)
+        except Exception:
+            pass
+
     app = EchoVRTextureViewer(root)
     root.mainloop()
 
