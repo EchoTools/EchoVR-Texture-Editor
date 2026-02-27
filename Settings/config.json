@@ -1,0 +1,10 @@
+{
+    "output_folder": null,
+    "data_folder": null,
+    "extracted_folder": "C:\\Users\\lucas\\Documents\\GitHub\\test\\EchoVR-Texture-Editor\\Settings\\pcvr-extracted",
+    "repacked_folder": "C:\\Users\\lucas\\Documents\\GitHub\\test\\EchoVR-Texture-Editor\\Settings\\output-both",
+    "pcvr_input_folder": "C:\\Users\\lucas\\Documents\\GitHub\\test\\EchoVR-Texture-Editor\\Settings\\input-pcvr",
+    "quest_input_folder": "C:\\Users\\lucas\\Documents\\GitHub\\test\\EchoVR-Texture-Editor\\Settings\\input-quest",
+    "backup_folder": null,
+    "renderdoc_path": null
+}
