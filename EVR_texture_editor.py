@@ -55,8 +55,23 @@ def get_tool_path(tool_name):
         
     return settings_path
 
+def get_cache_dir():
+    # Check Settings folder first (Preferred)
+    settings_path = get_settings_path("texture_cache")
+    if os.path.exists(settings_path) and os.path.isdir(settings_path):
+        return settings_path
+    
+    base = get_base_dir()
+    # Check legacy/root location
+    legacy_path = os.path.join(base, "texture_cache")
+    if os.path.exists(legacy_path) and os.path.isdir(legacy_path):
+        return legacy_path
+        
+    # Default to Settings folder
+    return settings_path
+
 CONFIG_FILE = get_settings_path("config.json")
-CACHE_DIR = get_settings_path("texture_cache")  # Store cache in Settings folder for persistence
+CACHE_DIR = get_cache_dir()  # Store cache in Settings folder for persistence (or root if exists)
 CACHE2_FILE = get_settings_path("cache2.json")
 LEGACY_CACHE_FILE = get_settings_path("cache.json")
 MAPPING_FILE = get_settings_path("texture_mapping.json")
@@ -388,10 +403,11 @@ class TutorialPopup:
 
 class ProgressDialog:
     """Simple progress dialog for long-running operations"""
-    def __init__(self, parent, title="Processing", message="Please wait..."):
+    def __init__(self, parent, title="Processing", message="Please wait...", show_bar=True):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
-        self.dialog.geometry("400x150")
+        height = 150 if show_bar else 100
+        self.dialog.geometry(f"400x{height}")
         self.dialog.configure(bg='#1a1a1a')
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
@@ -408,13 +424,18 @@ class ProgressDialog:
         # Message label
         tk.Label(self.dialog, text=message, font=("Arial", 11), fg="#ffffff", bg='#1a1a1a').pack(pady=(20, 10))
         
-        # Progress bar
-        self.progress = ttk.Progressbar(self.dialog, length=300, mode='determinate', value=0)
-        self.progress.pack(pady=10, padx=50)
-        
-        # Status label
-        self.status_label = tk.Label(self.dialog, text="0%", font=("Arial", 9), fg="#4cd964", bg='#1a1a1a')
-        self.status_label.pack(pady=5)
+        self.show_bar = show_bar
+        if show_bar:
+            # Progress bar
+            self.progress = ttk.Progressbar(self.dialog, length=300, mode='determinate', value=0)
+            self.progress.pack(pady=10, padx=50)
+            
+            # Status label
+            self.status_label = tk.Label(self.dialog, text="0%", font=("Arial", 9), fg="#4cd964", bg='#1a1a1a')
+            self.status_label.pack(pady=5)
+        else:
+            self.progress = None
+            self.status_label = None
         
         # Cancel button
         self.cancel_requested = False
@@ -429,9 +450,10 @@ class ProgressDialog:
         """Update progress (0-100)"""
         if not self.dialog.winfo_exists():
             return False
-        percent = int((current / total) * 100) if total > 0 else 0
-        self.progress['value'] = percent
-        self.status_label.config(text=f"{percent}%")
+        if self.show_bar and self.progress and self.status_label:
+            percent = int((current / total) * 100) if total > 0 else 0
+            self.progress['value'] = percent
+            self.status_label.config(text=f"{percent}%")
         self.dialog.update_idletasks()
         return not self.cancel_requested
     
@@ -1168,17 +1190,19 @@ class EVRToolsManager:
                 return path
         return None
     
-    def extract_package(self, data_dir, package_name, output_dir, textures_only=False):
+    def extract_package(self, data_dir, package_name, output_dir, export_type=""):
         if not self.tool_path:
             return False, "evrFileTools.exe not found"
         
         try:
             cmd = [
-                self.tool_path, "-mode", "extract", "-packageName", package_name,
-                "-dataDir", data_dir, "-outputDir", output_dir
+                self.tool_path, "-mode", "extract", "-package", package_name,
+                "-data", data_dir, "-output", output_dir,
+                "-force"
             ]
-            if textures_only:
-                cmd.append("-texturesonly")
+            if export_type:
+                cmd.extend(["--export", export_type])
+                cmd.extend(["-export", export_type])
             
             result = run_hidden_command(cmd, cwd=os.path.dirname(self.tool_path), timeout=2000)
             
@@ -1198,9 +1222,11 @@ class EVRToolsManager:
         
         try:
             cmd = [
-                self.tool_path, "-mode", "replace", "-packageName", package_name,
-                "-dataDir", data_dir, "-inputDir", input_dir, "-outputDir", output_dir,
-                "-ignoreOutputRestrictions"
+                self.tool_path, "-mode", "build",
+                "-package", package_name,
+                "-data", data_dir,
+                "-input", input_dir, "-output", output_dir,
+                "-force"
             ]
             
             result = run_hidden_command(cmd, cwd=os.path.dirname(self.tool_path), timeout=2000)
@@ -1217,8 +1243,11 @@ class EVRToolsManager:
 
 class DDSHandler:
     DXGI_FORMAT = {
-        0: "DXGI_FORMAT_UNKNOWN", 71: "DXGI_FORMAT_BC1_UNORM", 77: "DXGI_FORMAT_BC3_UNORM", 
+        0: "DXGI_FORMAT_UNKNOWN", 26: "DXGI_FORMAT_R11G11B10_FLOAT", 61: "DXGI_FORMAT_R8_UNORM",
+        71: "DXGI_FORMAT_BC1_UNORM", 77: "DXGI_FORMAT_BC3_UNORM", 
         80: "DXGI_FORMAT_BC4_UNORM", 83: "DXGI_FORMAT_BC5_UNORM",
+        91: "DXGI_FORMAT_B8G8R8A8_UNORM_SRGB",
+        87: "DXGI_FORMAT_B8G8R8A8_TYPELESS",
     }
     
     @staticmethod
@@ -1248,7 +1277,7 @@ class DDSHandler:
                     if len(extended_header) >= 20:
                         format_code = struct.unpack('<I', extended_header[0:4])[0]
                         format_name = DDSHandler.DXGI_FORMAT.get(format_code, f"DXGI Format {format_code}")
-                        if format_code in [26, 72, 78]: is_problematic = True
+                        if format_code in [26, 72, 78, 87]: is_problematic = True
                 elif pixel_format_flags & 0x40: format_name = "RGB"
                 
                 return {
@@ -1400,6 +1429,8 @@ class TextureLoader:
             
             base = os.path.splitext(os.path.basename(temp_input.name))[0]
             converted_file = os.path.join(temp_dir, base + ".png")
+            cmd = [texconv_path, "decode", temp_input.name, converted_file]
+            result = run_hidden_command(cmd)
             
             if os.path.exists(converted_file):
                 img = Image.open(converted_file).convert("RGBA")
@@ -1422,28 +1453,34 @@ class TextureLoader:
 
 class TextureReplacer:
     @staticmethod
-    def convert_to_dds_bc7_srgb(source_path, target_width, target_height):
-        """Convert PNG or DDS to DDS BC7 UNORM sRGB at target size. Returns (output_dds_path, file_size) or (None, 0) on failure."""
+    def convert_to_dds(source_path, target_width, target_height):
+        """Convert image to DDS using the bundled texconv. Returns (output_dds_path, file_size) or (None, 0) on failure."""
         texconv_path = get_tool_path("texconv.exe")
         if not texconv_path or not os.path.exists(texconv_path):
             return None, 0
         try:
+            img = Image.open(source_path).convert("RGBA")
+            if img.width != target_width or img.height != target_height:
+                img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+            
             with tempfile.TemporaryDirectory(prefix="pcvr_dds_") as tmp:
-                cmd = [
-                    texconv_path, "-f", "BC7_UNORM_SRGB",
-                    "-w", str(target_width), "-h", str(target_height),
-                    "-m", "0",
-                    "-o", tmp, "-y",
-                    source_path,
-                ]
+                temp_png = os.path.join(tmp, "temp.png")
+                img.save(temp_png, "PNG")
+                
+                out_dds = os.path.join(tmp, "output.dds")
+                
+                # Correctly call the Go texconv tool, which uses 'encode <in> <out>'
+                cmd = [texconv_path, "encode", temp_png, out_dds]
                 result = run_hidden_command(cmd, timeout=60)
+
                 if result.returncode != 0:
-                    return None, 0
-                base = os.path.splitext(os.path.basename(source_path))[0]
-                out_dds = os.path.join(tmp, base + ".dds")
+                    return None, 0 # Conversion failed
+
                 if not os.path.isfile(out_dds):
-                    return None, 0
+                    return None, 0 # Output file not created
+
                 size = os.path.getsize(out_dds)
+                base = os.path.splitext(os.path.basename(source_path))[0]
                 final_path = os.path.join(tempfile.gettempdir(), f"pcvr_replace_{os.getpid()}_{base}.dds")
                 shutil.copy2(out_dds, final_path)
                 return final_path, size
@@ -1480,21 +1517,21 @@ class TextureReplacer:
             repl_info = DDSHandler.get_dds_info(replacement_texture_path) if is_dds else None
             needs_convert = not is_dds or (repl_info and (repl_info.get('width') != target_w or repl_info.get('height') != target_h))
             if needs_convert or not is_dds:
-                dds_path, replacement_size = TextureReplacer.convert_to_dds_bc7_srgb(replacement_texture_path, target_w, target_h)
+                dds_path, replacement_size = TextureReplacer.convert_to_dds(replacement_texture_path, target_w, target_h)
                 if dds_path is None:
-                    return False, "texconv failed (install texconv.exe for PNG / resolution fix). BC7 sRGB required."
+                    return False, "DDS conversion via texconv.exe failed. Check tool and file paths."
             else:
                 dds_path = replacement_texture_path
                 if replacement_size is None:
                     replacement_size = os.path.getsize(replacement_texture_path)
 
-            input_textures_folder = os.path.join(pcvr_input_folder, "0", "-4707359568332879775")
-            input_corresponding_folder = os.path.join(pcvr_input_folder, "0", "5353709876897953952")
+            input_textures_folder = os.path.join(pcvr_input_folder, "beac1969cb7b8861")
+            input_corresponding_folder = os.path.join(pcvr_input_folder, "4a4c32c49300b8a0")
             os.makedirs(input_textures_folder, exist_ok=True)
             os.makedirs(input_corresponding_folder, exist_ok=True)
 
             texture_name = os.path.basename(original_texture_path)
-            output_corresponding_file = os.path.join(output_folder, "5353709876897953952", texture_name)
+            output_corresponding_file = os.path.join(output_folder, "4a4c32c49300b8a0", texture_name)
             input_texture_path = os.path.join(input_textures_folder, texture_name)
             input_corresponding_path = os.path.join(input_corresponding_folder, texture_name)
 
@@ -1517,8 +1554,8 @@ class TextureReplacer:
     @staticmethod
     def replace_quest_texture(output_folder, quest_input_folder, original_texture_path, replacement_texture_path, texture_cache):
         try:
-            input_textures_folder = os.path.join(quest_input_folder, "0", "5231972605540061417")
-            input_corresponding_folder = os.path.join(quest_input_folder, "0", "-2094201140079393352")
+            input_textures_folder = os.path.join(quest_input_folder, "489b7b69cb19e0e9")
+            input_corresponding_folder = os.path.join(quest_input_folder, "e2ef0854d0cd69b8")
             os.makedirs(input_textures_folder, exist_ok=True)
             os.makedirs(input_corresponding_folder, exist_ok=True)
             
@@ -1546,11 +1583,16 @@ class TextureReplacer:
             
             if not success: return False, "Failed to encode/find texture info"
             
+            dest_texture_path = os.path.join(dest_textures_folder, texture_name)
+            shutil.copy2(temp_output, dest_texture_path)
             input_texture_path = os.path.join(input_textures_folder, texture_name)
             shutil.copy2(temp_output, input_texture_path)
             final_size = os.path.getsize(temp_output)
             
-            output_corresponding_file = os.path.join(output_folder, "-2094201140079393352", texture_name)
+            dest_corresponding_path = os.path.join(dest_corresponding_folder, texture_name)
+            if os.path.exists(dest_corresponding_path):
+                TextureReplacer.hex_edit_file_size(dest_corresponding_path, final_size)
+            output_corresponding_file = os.path.join(output_folder, "e2ef0854d0cd69b8", texture_name)
             if os.path.exists(output_corresponding_file):
                 input_corresponding_path = os.path.join(input_corresponding_folder, texture_name)
                 shutil.copy2(output_corresponding_file, input_corresponding_path)
@@ -1565,8 +1607,9 @@ class TextureReplacer:
 
 # --- NEW GRID POPUP CLASS WITH PAGINATION ---
 class TextureGridPopup:
-    TEXTURES_PER_BATCH = 250  # Load 250 at a time
     GRID_COLS = 8
+    ROWS_PER_PAGE = 12
+    TEXTURES_PER_PAGE = GRID_COLS * ROWS_PER_PAGE
     THUMB_SIZE = (100, 100)
     
     def __init__(self, parent, app, image_files, folder_path, is_quest):
@@ -1578,22 +1621,20 @@ class TextureGridPopup:
         
         self.window = tk.Toplevel(parent)
         self.window.title(f"Texture Gallery ({len(image_files)} total)")
-        self.window.geometry("1000x700")
+        self.window.geometry("1000x800")
         self.window.configure(bg='#1a1a1a')
         
         self.loaded_images = {}
-        self.loaded_count = 0
-        self.current_batch = 0
-        self.next_row = 0
-        self.load_more_btn = None
-        self.load_more_frame = None
+        self.current_page = 0
+        self.total_pages = max(1, (len(image_files) + self.TEXTURES_PER_PAGE - 1) // self.TEXTURES_PER_PAGE)
+        self.loading_generation = 0  # To invalidate old threads
         
         # Store texture metadata for sorting
         self.texture_info = {}  # filename -> {'width': int, 'height': int, 'pixels': int, 'size': int}
         self.sort_mode = "name"  # name, width, height, pixels
         
         self.setup_ui()
-        self.load_next_batch()
+        self.load_page(0)
 
     def setup_ui(self):
         top_frame = tk.Frame(self.window, bg='#2a2a2a', height=60)
@@ -1612,6 +1653,21 @@ class TextureGridPopup:
                                          state="readonly", width=20, font=("Arial", 9))
         self.sort_dropdown.pack(side=tk.RIGHT, padx=(0, 10), pady=5)
         self.sort_dropdown.bind('<<ComboboxSelected>>', self.on_sort_change)
+        
+        # Navigation Frame (Bottom)
+        nav_frame = tk.Frame(self.window, bg='#2a2a2a', height=50)
+        nav_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        self.prev_btn = tk.Button(nav_frame, text="<< Previous", command=self.prev_page, 
+                                 bg='#4a4a4a', fg='#ffffff', font=("Arial", 9, "bold"), relief=tk.RAISED, bd=1, state=tk.DISABLED)
+        self.prev_btn.pack(side=tk.LEFT, padx=20, pady=10)
+        
+        self.page_label = tk.Label(nav_frame, text=f"Page 1 / {self.total_pages}", font=("Arial", 10, "bold"), fg='#ffffff', bg='#2a2a2a')
+        self.page_label.pack(side=tk.LEFT, expand=True)
+        
+        self.next_btn = tk.Button(nav_frame, text="Next >>", command=self.next_page, 
+                                 bg='#4a4a4a', fg='#ffffff', font=("Arial", 9, "bold"), relief=tk.RAISED, bd=1)
+        self.next_btn.pack(side=tk.RIGHT, padx=20, pady=10)
         
         self.canvas = tk.Canvas(self.window, bg='#1a1a1a', highlightthickness=0)
         self.scrollbar = ttk.Scrollbar(self.window, orient="vertical", command=self.canvas.yview)
@@ -1633,20 +1689,42 @@ class TextureGridPopup:
         self.app.select_texture_by_name(filename)
         self.parent.lift()
 
-    def load_next_batch(self):
-        """Load the next batch of textures (250 at a time)"""
-        start_idx = self.current_batch * self.TEXTURES_PER_BATCH
-        end_idx = min(start_idx + self.TEXTURES_PER_BATCH, len(self.image_files))
-        
-        if start_idx >= len(self.image_files):
-            return
-        
-        threading.Thread(target=self._load_batch_worker, args=(start_idx, end_idx), daemon=True).start()
+    def prev_page(self):
+        if self.current_page > 0:
+            self.load_page(self.current_page - 1)
+            
+    def next_page(self):
+        if self.current_page < self.total_pages - 1:
+            self.load_page(self.current_page + 1)
 
-    def _load_batch_worker(self, start_idx, end_idx):
-        """Worker thread to load a batch of textures"""
+    def load_page(self, page_num):
+        self.current_page = page_num
+        self.loading_generation += 1
+        current_gen = self.loading_generation
+        
+        # Update controls
+        self.page_label.config(text=f"Page {page_num + 1} / {self.total_pages}")
+        self.prev_btn.config(state=tk.NORMAL if page_num > 0 else tk.DISABLED)
+        self.next_btn.config(state=tk.NORMAL if page_num < self.total_pages - 1 else tk.DISABLED)
+        
+        # Clear grid
+        for widget in self.scroll_frame.winfo_children():
+            widget.destroy()
+        self.loaded_images.clear()
+        self.canvas.yview_moveto(0)
+        
+        start_idx = page_num * self.TEXTURES_PER_PAGE
+        end_idx = min(start_idx + self.TEXTURES_PER_PAGE, len(self.image_files))
+        
+        # Show loading indicator
+        loading_lbl = tk.Label(self.scroll_frame, text="Loading...", fg="white", bg="#1a1a1a")
+        loading_lbl.grid(row=0, column=0, columnspan=self.GRID_COLS, pady=20)
+        
+        threading.Thread(target=self._load_page_worker, args=(start_idx, end_idx, current_gen, loading_lbl), daemon=True).start()
+
+    def _load_page_worker(self, start_idx, end_idx, generation, loading_lbl):
         for idx in range(start_idx, end_idx):
-            if not self.window.winfo_exists():
+            if not self.window.winfo_exists() or self.loading_generation != generation:
                 return
             
             filename = self.image_files[idx]
@@ -1656,45 +1734,17 @@ class TextureGridPopup:
                 img = TextureLoader.load_texture(file_path, self.is_quest)
                 if img:
                     img.thumbnail(self.THUMB_SIZE)
-                    row = idx // self.GRID_COLS
-                    col = idx % self.GRID_COLS
+                    
+                    # Calculate row/col relative to this page
+                    rel_idx = idx - start_idx
+                    row = rel_idx // self.GRID_COLS
+                    col = rel_idx % self.GRID_COLS
+                    
                     self.window.after(0, lambda i=img, f=filename, r=row, c=col: self.add_thumbnail(i, f, r, c))
-                    self.loaded_count += 1
             except Exception:
                 pass
         
-        # Update UI when batch complete
-        total = len(self.image_files)
-        self.window.after(0, lambda: self._on_batch_complete(end_idx, total))
-
-    def _on_batch_complete(self, loaded_count, total):
-        """Called when a batch finishes loading"""
-        if not self.window.winfo_exists():
-            return
-        
-        self.current_batch += 1
-        remaining = total - loaded_count
-        
-        # Remove old button if exists
-        if self.load_more_frame and self.load_more_frame.winfo_exists():
-            self.load_more_frame.destroy()
-            self.load_more_frame = None
-            self.load_more_btn = None
-        
-        # Add new button if more textures remain
-        if remaining > 0:
-            next_row = loaded_count // self.GRID_COLS
-            if loaded_count % self.GRID_COLS != 0:
-                next_row += 1
-            
-            self.load_more_frame = tk.Frame(self.scroll_frame, bg='#1a1a1a')
-            self.load_more_frame.grid(row=next_row, column=0, columnspan=self.GRID_COLS, pady=10)
-            
-            btn_text = f"Load More ({min(self.TEXTURES_PER_BATCH, remaining)} remaining)"
-            self.load_more_btn = tk.Button(self.load_more_frame, text=btn_text, command=self.load_next_batch, 
-                                          bg='#007aff', fg='#ffffff', font=("Arial", 10, "bold"), 
-                                          relief=tk.RAISED, bd=2, padx=30, pady=10)
-            self.load_more_btn.pack()
+        self.window.after(0, lambda: loading_lbl.destroy())
 
     def add_thumbnail(self, img, filename, row, col):
         """Add a thumbnail to the grid"""
@@ -1737,23 +1787,8 @@ class TextureGridPopup:
         elif sort_selection == "Pixels (Small to Large)":
             self.image_files.sort(key=lambda f: self.texture_info.get(f, {}).get('pixels', 0), reverse=False)
         
-        # Reload grid with sorted items
-        self.reload_grid()
-    
-    def reload_grid(self):
-        """Clear and reload the grid with current sorting"""
-        # Clear existing widgets
-        for widget in self.scroll_frame.winfo_children():
-            widget.destroy()
-        
-        self.loaded_images.clear()
-        self.loaded_count = 0
-        self.current_batch = 0
-        self.load_more_btn = None
-        self.load_more_frame = None
-        
-        # Reload first batch
-        self.load_next_batch()
+        # Reload page 0
+        self.load_page(0)
 
 class EchoVRTextureViewer:
     def __init__(self, root):
@@ -1797,6 +1832,7 @@ class EchoVRTextureViewer:
         self.ensure_settings_folders()
         self.setup_ui()
         self.auto_detect_folders()
+        self.check_external_tools()
         
         if self.output_folder and os.path.exists(self.output_folder):
             self.set_output_folder(self.output_folder)
@@ -1824,6 +1860,32 @@ class EchoVRTextureViewer:
                 try:
                     os.makedirs(path)
                 except: pass
+
+    def check_external_tools(self):
+        """Check if external tools are runnable and warn about missing DLLs"""
+        tools = [
+            ("texconv.exe", "Texture Converter"),
+            ("evrtools.exe", "EVR Tools")
+        ]
+        
+        for tool_name, desc in tools:
+            path = get_tool_path(tool_name)
+            if os.path.exists(path):
+                try:
+                    # Run with no args. texconv exits 1 normally.
+                    # If DLLs are missing, Windows returns 0xC0000135 (-1073741515)
+                    cmd = [path]
+                    if sys.platform == 'win32':
+                        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, 
+                                              creationflags=subprocess.CREATE_NO_WINDOW)
+                        
+                        # Check for STATUS_DLL_NOT_FOUND
+                        if result.returncode == 3221225781 or result.returncode == -1073741515:
+                            self.log_info(f"❌ {desc} ({tool_name}) is missing DLLs!")
+                            self.log_info(f"   Please copy libsquish-0.dll, libstdc++-6.dll,")
+                            self.log_info(f"   and libgcc_s_seh-1.dll to the same folder as {tool_name}")
+                except Exception:
+                    pass
     
     def auto_detect_folders(self):
         base_dir = get_base_dir()
@@ -1998,8 +2060,10 @@ class EchoVRTextureViewer:
         self.download_btn = tk.Button(action_frame, text="Download All Textures", command=self.download_textures, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5)
         self.download_btn.pack(side=tk.LEFT, padx=5)
         
+        self.load_all_btn = tk.Button(action_frame, text="Load/Cache All", command=self.load_all_textures, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5)
+        self.load_all_btn.pack(side=tk.LEFT, padx=5)
+        
         self.resolution_status = tk.Label(button_panel, text="", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
-        self.resolution_status.pack(side=tk.LEFT, padx=20)
         
         info_frame = tk.LabelFrame(main_frame, text="TEXTURE INFORMATION", font=("Arial", 10, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'], relief=tk.RAISED, bd=2)
         info_frame.grid(row=6, column=0, columnspan=3, sticky='nsew', pady=(10, 0))
@@ -2164,6 +2228,7 @@ class EchoVRTextureViewer:
         except: pass
 
         tk.Label(popup, text="Select Extraction Mode", font=("Arial", 12, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_medium']).pack(pady=(20, 10))
+        tk.Label(popup, text="Full Package extraction is required for repacking.", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_medium']).pack(pady=(0, 20))
         tk.Label(popup, text="Texture mode is faster but only extracts texture files.", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_medium']).pack(pady=(0, 20))
 
         btn_frame = tk.Frame(popup, bg=self.colors['bg_medium'])
@@ -2173,6 +2238,8 @@ class EchoVRTextureViewer:
             popup.destroy()
             self._run_extraction(textures_only)
 
+        tk.Button(btn_frame, text="Extract Full Package (For Repacking)", command=lambda: do_extract(False), bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED).pack(fill=tk.X, pady=5)
+        tk.Button(btn_frame, text="Extract Textures Only (For Viewing)", command=lambda: do_extract(True), bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9), relief=tk.RAISED).pack(fill=tk.X, pady=5)
         tk.Button(btn_frame, text="Extract Textures Only (Fast)", command=lambda: do_extract(True), bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED).pack(fill=tk.X, pady=5)
         tk.Button(btn_frame, text="Extract Full Package (Slow)", command=lambda: do_extract(False), bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9), relief=tk.RAISED).pack(fill=tk.X, pady=5)
 
@@ -2181,19 +2248,18 @@ class EchoVRTextureViewer:
         mode_text = "Textures Only" if textures_only else "Full Package"
         
         # Show progress dialog
-        progress = ProgressDialog(self.root, "Extracting Package", f"Extracting {mode_text}...\n\nThis may take a few minutes...")
-        progress.progress.config(mode='indeterminate')
-        progress.progress.start()
+        progress = ProgressDialog(self.root, "Extracting Package", f"Extracting {mode_text}...\n\nThis may take a few minutes...", show_bar=False)
         
         self.evr_status_label.config(text=f"Extracting package ({mode_text})...", fg=self.colors['accent_green'])
         self.root.update_idletasks()
         
         def extraction_thread():
-            success, message = self.evr_tools.extract_package(self.data_folder, self.package_name, self.extracted_folder, textures_only=textures_only)
+            export_type = "textures" if textures_only else ""
+            success, message = self.evr_tools.extract_package(self.data_folder, self.package_name, self.extracted_folder, export_type=export_type)
             self.root.after(0, lambda: self.on_extraction_complete(success, message, progress))
         
         threading.Thread(target=extraction_thread, daemon=True).start()
-    
+
     def on_extraction_complete(self, success, message, progress=None):
         if progress:
             progress.close()
@@ -2214,6 +2280,7 @@ class EchoVRTextureViewer:
     
     def find_extracted_textures(self, base_dir):
         target_names = {"-4707359568332879775", "5231972605540061417"}
+        target_names = {"beac1969cb7b8861", "489b7b69cb19e0e9"}
         for root, dirs, _ in os.walk(base_dir):
             for d in dirs:
                 if d in target_names:
@@ -2225,6 +2292,9 @@ class EchoVRTextureViewer:
             messagebox.showerror("Error", "Please select data folder, package, and extraction folder first.")
             return
 
+        input_folder = self.extracted_folder
+        if not input_folder or not os.path.exists(input_folder):
+            messagebox.showerror("Error", "Extracted folder not set or found. Please perform a full extraction first.")
         if self.is_quest_textures and self.quest_input_folder:
             input_folder = self.quest_input_folder
             self.log_info("🎯 Using Quest input folder for repacking")
@@ -2235,6 +2305,8 @@ class EchoVRTextureViewer:
             messagebox.showerror("Error", "Input folder not found. Please check input-pcvr/input-quest folders.")
             return
         
+        self.log_info(f"📦 Using '{os.path.basename(input_folder)}' as input for repacking.")
+        
         script_dir = os.path.dirname(os.path.abspath(__file__))
         output_dir = self.repacked_folder
         
@@ -2242,9 +2314,7 @@ class EchoVRTextureViewer:
         if not confirm: return
         
         # Show progress dialog
-        progress = ProgressDialog(self.root, "Repacking Package", "Rebuilding package files...\n\nThis may take a few minutes...")
-        progress.progress.config(mode='indeterminate')
-        progress.progress.start()
+        progress = ProgressDialog(self.root, "Repacking Package", "Rebuilding package files...\n\nThis may take a few minutes...", show_bar=False)
         
         self.evr_status_label.config(text="Repacking package...", fg=self.colors['accent_green'])
         self.root.update_idletasks()
@@ -2384,6 +2454,8 @@ class EchoVRTextureViewer:
             self.is_pcvr_textures = False
             self.textures_folder = os.path.join(path, "5231972605540061417")
             self.corresponding_folder = os.path.join(path, "-2094201140079393352")
+            self.textures_folder = os.path.join(path, "489b7b69cb19e0e9")
+            self.corresponding_folder = os.path.join(path, "e2ef0854d0cd69b8")
             self.platform_label.config(text="Platform: Quest (ASTC)", fg=self.colors['success'])
             self.log_info("🎯 Switched to Quest mode")
         elif "pcvr" in folder_name:
@@ -2391,22 +2463,29 @@ class EchoVRTextureViewer:
             self.is_pcvr_textures = True
             self.textures_folder = os.path.join(path, "-4707359568332879775")
             self.corresponding_folder = os.path.join(path, "5353709876897953952")
+            self.textures_folder = os.path.join(path, "beac1969cb7b8861")
+            self.corresponding_folder = os.path.join(path, "4a4c32c49300b8a0")
             self.platform_label.config(text="Platform: PCVR (DDS)", fg=self.colors['accent_blue'])
             self.push_quest_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
             self.log_info("🎮 Switched to PCVR mode")
         else:
             quest_textures_folder = os.path.join(path, "5231972605540061417")
             pcvr_textures_folder = os.path.join(path, "-4707359568332879775")
+            quest_textures_folder = os.path.join(path, "489b7b69cb19e0e9")
+            pcvr_textures_folder = os.path.join(path, "beac1969cb7b8861")
             if getattr(sys, 'frozen', False):
                 parent_dir = os.path.dirname(os.path.dirname(path))
                 if not os.path.exists(quest_textures_folder):
                     quest_textures_folder = os.path.join(parent_dir, os.path.basename(path), "5231972605540061417")
+                    quest_textures_folder = os.path.join(parent_dir, os.path.basename(path), "489b7b69cb19e0e9")
                 if not os.path.exists(pcvr_textures_folder):
                     pcvr_textures_folder = os.path.join(parent_dir, os.path.basename(path), "-4707359568332879775")
+                    pcvr_textures_folder = os.path.join(parent_dir, os.path.basename(path), "beac1969cb7b8861")
             
             if os.path.exists(quest_textures_folder):
                 self.textures_folder = quest_textures_folder
                 self.corresponding_folder = os.path.join(path, "-2094201140079393352")
+                self.corresponding_folder = os.path.join(path, "e2ef0854d0cd69b8")
                 self.is_quest_textures = True
                 self.is_pcvr_textures = False
                 self.platform_label.config(text="Platform: Quest (ASTC)", fg=self.colors['success'])
@@ -2414,6 +2493,7 @@ class EchoVRTextureViewer:
             elif os.path.exists(pcvr_textures_folder):
                 self.textures_folder = pcvr_textures_folder
                 self.corresponding_folder = os.path.join(path, "5353709876897953952")
+                self.corresponding_folder = os.path.join(path, "4a4c32c49300b8a0")
                 self.is_quest_textures = False
                 self.is_pcvr_textures = True
                 self.platform_label.config(text="Platform: PCVR (DDS)", fg=self.colors['accent_blue'])
@@ -2582,6 +2662,17 @@ class EchoVRTextureViewer:
                 }
             else:
                 self.original_info = DDSHandler.get_dds_info(self.current_texture)
+                if self.original_info is None:
+                    try:
+                        size = os.path.getsize(self.current_texture)
+                    except:
+                        size = 0
+                    self.original_info = {
+                        'file_size': size,
+                        'format': 'DDS/Raw',
+                        'width': image.width,
+                        'height': image.height
+                    }
             
             self.update_texture_info()
             self.edit_btn.config(state=tk.NORMAL, bg=self.colors['accent_blue'])
@@ -2731,12 +2822,6 @@ class EchoVRTextureViewer:
             if not confirm:
                 return
 
-        if self.is_quest_textures and not self.quest_input_folder:
-            messagebox.showerror("Error", "Quest input folder not found.")
-            return
-        if not self.is_quest_textures and not self.pcvr_input_folder:
-            messagebox.showerror("Error", "PCVR input folder not found.")
-            return
         replacement_size = None
         if not self.is_quest_textures and self.replacement_info and 'file_size' in self.replacement_info:
             replacement_size = self.replacement_info.get('file_size')
@@ -2745,8 +2830,8 @@ class EchoVRTextureViewer:
             texture_name = self.filtered_textures[index]
             current_texture_path = os.path.join(self.textures_folder, texture_name)
             if self.is_quest_textures:
-                return texture_name, TextureReplacer.replace_quest_texture(self.output_folder, self.quest_input_folder, current_texture_path, self.replacement_texture, self.texture_cache)
-            return texture_name, TextureReplacer.replace_pcvr_texture(self.output_folder, self.pcvr_input_folder, current_texture_path, self.replacement_texture, replacement_size)
+                return texture_name, TextureReplacer.replace_quest_texture(self.extracted_folder, current_texture_path, self.replacement_texture, self.texture_cache)
+            return texture_name, TextureReplacer.replace_pcvr_texture(self.extracted_folder, current_texture_path, self.replacement_texture, replacement_size)
 
         results = []
         if len(selection) > 3:
@@ -2872,12 +2957,95 @@ class EchoVRTextureViewer:
             self.file_list.see(idx)
             self.on_texture_selected(None)
 
+    def load_all_textures(self):
+        if not self.textures_folder or not self.all_textures:
+            messagebox.showinfo("Info", "No textures found to load.")
+            return
+            
+        confirm = messagebox.askyesno("Load All Textures", f"This will load and cache {len(self.all_textures)} textures.\nThis process converts textures to PNG for previewing.\nIt may take a while depending on the number of files.\n\nContinue?")
+        if not confirm: return
+
+        self.load_all_btn.config(state=tk.DISABLED)
+        progress = ProgressDialog(self.root, "Caching Textures", "Generating texture cache...", show_bar=True)
+        
+        threading.Thread(target=self._load_all_worker, args=(progress,), daemon=True).start()
+
+    def _load_all_worker(self, progress):
+        total = len(self.all_textures)
+        failed = []
+        skipped = 0
+        success = 0
+        
+        for i, texture_name in enumerate(self.all_textures):
+            if progress.cancel_requested:
+                break
+            
+            full_path = os.path.join(self.textures_folder, texture_name)
+            try:
+                # Check if already cached to avoid unnecessary loading/decoding
+                cache_path = TextureLoader.get_cache_path(full_path)
+                if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
+                    skipped += 1
+                else:
+                    img = TextureLoader.load_texture(full_path, self.is_quest_textures)
+                    if img:
+                        success += 1
+                    else:
+                        # Determine format for report
+                        fmt = "ASTC" if self.is_quest_textures else "Unknown"
+                        if not self.is_quest_textures:
+                            info = DDSHandler.get_dds_info(full_path)
+                            if info: fmt = info.get('format', 'Unknown')
+                        failed.append(f"{texture_name} ({fmt})")
+            except Exception as e:
+                failed.append(f"{texture_name} (Error: {str(e)})")
+            
+            if not progress.update(i + 1, total):
+                break
+        
+        self.root.after(0, lambda: self._on_load_all_complete(progress, success, skipped, failed))
+
+    def _on_load_all_complete(self, progress, success, skipped, failed):
+        progress.close()
+        self.load_all_btn.config(state=tk.NORMAL)
+        
+        msg = f"Processing Complete.\n\nCached: {success}\nSkipped (Already Cached): {skipped}\nFailed: {len(failed)}"
+        if failed:
+            msg += "\n\nFailures (First 20):\n" + "\n".join(failed[:20])
+            if len(failed) > 20: msg += f"\n...and {len(failed)-20} more."
+            
+            try:
+                with open("texture_load_failures.txt", "w") as f:
+                    f.write("Failed Textures:\n" + "\n".join(failed))
+                msg += "\n\nFull list saved to texture_load_failures.txt"
+            except: pass
+            messagebox.showwarning("Load Results", msg)
+        else:
+            messagebox.showinfo("Load Results", msg)
+
 def main():
     root = tk.Tk()
 
     # Set app icon
     icon_path = os.path.join(get_base_dir(), "icon.ico")
     
+    # Check if running as PyInstaller bundle (onefile) where resources are in _MEIPASS
+    if hasattr(sys, '_MEIPASS'):
+        bundled_icon = os.path.join(sys._MEIPASS, "icon.ico")
+        if os.path.exists(bundled_icon):
+            icon_path = bundled_icon
+            
+    if os.path.exists(icon_path):
+        try:
+            root.iconbitmap(icon_path)
+        except Exception:
+            pass
+
+    app = EchoVRTextureViewer(root)
+    root.mainloop()
+
+if __name__ == '__main__':
+    main()
     # Check if running as PyInstaller bundle (onefile) where resources are in _MEIPASS
     if hasattr(sys, '_MEIPASS'):
         bundled_icon = os.path.join(sys._MEIPASS, "icon.ico")
