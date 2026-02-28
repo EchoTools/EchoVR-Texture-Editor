@@ -1216,7 +1216,7 @@ class EVRToolsManager:
         except Exception as e:
             return False, f"Extraction error: {str(e)}"
     
-    def repack_package(self, output_dir, package_name, data_dir, input_dir):
+    def repack_package(self, output_dir, package_name, data_dir, input_dir, quick_mode=False):
         if not self.tool_path:
             return False, "evrFileTools.exe not found"
         
@@ -1228,6 +1228,8 @@ class EVRToolsManager:
                 "-input", input_dir, "-output", output_dir,
                 "-force"
             ]
+            if quick_mode:
+                cmd.append("-quick")
             
             result = run_hidden_command(cmd, cwd=os.path.dirname(self.tool_path), timeout=2000)
             
@@ -2307,42 +2309,90 @@ class EchoVRTextureViewer:
         
         self.log_info(f"📦 Using '{os.path.basename(input_folder)}' as input for repacking.")
         
+        # Popup for Repack Mode
+        popup = tk.Toplevel(self.root)
+        popup.title("Select Repack Mode")
+        popup.geometry("500x250")
+        popup.configure(bg=self.colors['bg_medium'])
+        popup.resizable(False, False)
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        try:
+            x = self.root.winfo_x() + (self.root.winfo_width() - 500) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - 250) // 2
+            popup.geometry(f"+{x}+{y}")
+        except: pass
+
+        tk.Label(popup, text="Choose Repack Method", font=("Arial", 12, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_medium']).pack(pady=(20, 10))
+        
+        btn_frame = tk.Frame(popup, bg=self.colors['bg_medium'])
+        btn_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        def do_repack(quick):
+            popup.destroy()
+            self._run_repack(input_folder, quick)
+
+        # Full Repack Button
+        full_btn = tk.Button(btn_frame, text="Full Repack (Standard)\nCreates new files in 'output-both' folder.\nSafe, leaves original files untouched.", 
+                            command=lambda: do_repack(False), bg=self.colors['bg_light'], fg=self.colors['text_light'], 
+                            font=("Arial", 10), relief=tk.RAISED, justify=tk.LEFT, padx=10, pady=5)
+        full_btn.pack(fill=tk.X, pady=5)
+        
+        # Quick Repack Button
+        quick_btn = tk.Button(btn_frame, text="Quick Repack (Experimental)\nDirectly modifies game files in-place.\nFastest, but requires a backup!", 
+                             command=lambda: do_repack(True), bg=self.colors['accent_orange'], fg=self.colors['text_light'], 
+                             font=("Arial", 10, "bold"), relief=tk.RAISED, justify=tk.LEFT, padx=10, pady=5)
+        quick_btn.pack(fill=tk.X, pady=5)
+
+    def _run_repack(self, input_folder, quick_mode):
         script_dir = os.path.dirname(os.path.abspath(__file__))
         output_dir = self.repacked_folder
         
-        confirm = messagebox.askyesno("Confirm Repack", f"Repack modified files to:\n{output_dir}\n\nContinue?")
-        if not confirm: return
+        if quick_mode:
+            confirm = messagebox.askyesno("Confirm Quick Repack", "⚠ WARNING: Quick Repack modifies your game files directly.\n\nEnsure you have a backup before proceeding.\n\nContinue?")
+            if not confirm: return
+        else:
+            confirm = messagebox.askyesno("Confirm Repack", f"Repack modified files to:\n{output_dir}\n\nContinue?")
+            if not confirm: return
         
         # Show progress dialog
-        progress = ProgressDialog(self.root, "Repacking Package", "Rebuilding package files...\n\nThis may take a few minutes...", show_bar=False)
+        mode_str = "Quick Repack" if quick_mode else "Full Repack"
+        progress = ProgressDialog(self.root, "Repacking Package", f"{mode_str} in progress...\n\nThis may take a few minutes...", show_bar=False)
         
-        self.evr_status_label.config(text="Repacking package...", fg=self.colors['accent_green'])
+        self.evr_status_label.config(text=f"{mode_str}...", fg=self.colors['accent_green'])
         self.root.update_idletasks()
         
         def repacking_thread():
-            success, message = self.evr_tools.repack_package(output_dir, self.package_name, self.data_folder, input_folder)
-            self.root.after(0, lambda: self.on_repacking_complete(success, message, output_dir, progress))
+            success, message = self.evr_tools.repack_package(output_dir, self.package_name, self.data_folder, input_folder, quick_mode=quick_mode)
+            self.root.after(0, lambda: self.on_repacking_complete(success, message, output_dir, progress, quick_mode))
         
         threading.Thread(target=repacking_thread, daemon=True).start()
     
-    def on_repacking_complete(self, success, message, output_dir, progress=None):
+    def on_repacking_complete(self, success, message, output_dir, progress=None, quick_mode=False):
         if progress:
             progress.close()
         
         if success:
             self.evr_status_label.config(text="Repacking successful!", fg=self.colors['success'])
             self.log_info(f"✓ REPACKING: {message}")
-            packages_path = os.path.join(output_dir, "packages")
-            manifests_path = os.path.join(output_dir, "manifests")
-            if os.path.exists(packages_path) and os.path.exists(manifests_path):
-                self.log_info(f"✓ Packages and manifests created in: {output_dir}")
-                self.update_quest_push_button()
+            
+            if quick_mode:
+                self.log_info("✓ Game files updated directly.")
+                messagebox.showinfo("Repacking Result", "Quick Repack Complete!\nGame files have been updated.")
             else:
-                self.log_info("⚠ Packages or manifests folders not found in output directory")
+                packages_path = os.path.join(output_dir, "packages")
+                manifests_path = os.path.join(output_dir, "manifests")
+                if os.path.exists(packages_path) and os.path.exists(manifests_path):
+                    self.log_info(f"✓ Packages and manifests created in: {output_dir}")
+                    self.update_quest_push_button()
+                else:
+                    self.log_info("⚠ Packages or manifests folders not found in output directory")
+                messagebox.showinfo("Repacking Result", message)
         else:
             self.evr_status_label.config(text="Repacking failed", fg=self.colors['error'])
             self.log_info(f"✗ REPACKING FAILED: {message}")
-        messagebox.showinfo("Repacking Result", message)
+            messagebox.showinfo("Repacking Result", message)
     
     def check_app_updates(self):
         """Check for app updates on GitHub"""
@@ -3029,23 +3079,6 @@ def main():
     # Set app icon
     icon_path = os.path.join(get_base_dir(), "icon.ico")
     
-    # Check if running as PyInstaller bundle (onefile) where resources are in _MEIPASS
-    if hasattr(sys, '_MEIPASS'):
-        bundled_icon = os.path.join(sys._MEIPASS, "icon.ico")
-        if os.path.exists(bundled_icon):
-            icon_path = bundled_icon
-            
-    if os.path.exists(icon_path):
-        try:
-            root.iconbitmap(icon_path)
-        except Exception:
-            pass
-
-    app = EchoVRTextureViewer(root)
-    root.mainloop()
-
-if __name__ == '__main__':
-    main()
     # Check if running as PyInstaller bundle (onefile) where resources are in _MEIPASS
     if hasattr(sys, '_MEIPASS'):
         bundled_icon = os.path.join(sys._MEIPASS, "icon.ico")
