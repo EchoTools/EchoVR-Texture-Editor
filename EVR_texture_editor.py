@@ -76,6 +76,12 @@ CACHE2_FILE = get_settings_path("cache2.json")
 LEGACY_CACHE_FILE = get_settings_path("cache.json")
 MAPPING_FILE = get_settings_path("texture_mapping.json")
 
+# --- CONSTANTS ---
+PCVR_TEXTURE_ID = "beac1969cb7b8861"
+PCVR_METADATA_ID = "4a4c32c49300b8a0"
+QUEST_TEXTURE_ID = "489b7b69cb19e0e9"
+QUEST_METADATA_ID = "e2ef0854d0cd69b8"
+
 # App version for updates
 APP_VERSION = "2.0.0"
 GITHUB_REPO = "heisthecat31/EchoVR-Texture-Editor"
@@ -270,6 +276,60 @@ class ConfigManager:
                 json.dump(config, f, indent=4)
         except Exception as e:
             print(f"Config save error: {e}")
+
+class ToolTip(object):
+    """
+    create a tooltip for a given widget
+    """
+    def __init__(self, widget, text='widget info'):
+        self.waittime = 500     #miliseconds
+        self.wraplength = 180   #pixels
+        self.widget = widget
+        self.text = text
+        self.widget.bind("<Enter>", self.enter)
+        self.widget.bind("<Leave>", self.leave)
+        self.widget.bind("<ButtonPress>", self.leave)
+        self.id = None
+        self.tw = None
+
+    def enter(self, event=None):
+        self.schedule()
+
+    def leave(self, event=None):
+        self.unschedule()
+        self.hidetip()
+
+    def schedule(self):
+        self.unschedule()
+        self.id = self.widget.after(self.waittime, self.showtip)
+
+    def unschedule(self):
+        id = self.id
+        self.id = None
+        if id:
+            self.widget.after_cancel(id)
+
+    def showtip(self, event=None):
+        x = y = 0
+        x, y, cx, cy = self.widget.bbox("insert")
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 20
+        # creates a toplevel window
+        self.tw = tk.Toplevel(self.widget)
+        # Leaves only the label and removes the app window
+        self.tw.wm_overrideredirect(True)
+        self.tw.wm_geometry("+%d+%d" % (x, y))
+        label = tk.Label(self.tw, text=self.text, justify='left',
+                       background="#ffffe0", relief='solid', borderwidth=1,
+                       wraplength = self.wraplength,
+                       font=("tahoma", "8", "normal"))
+        label.pack(ipadx=1)
+
+    def hidetip(self):
+        tw = self.tw
+        self.tw= None
+        if tw:
+            tw.destroy()
 
 class TutorialPopup:
     """Step-by-step guided tutorial with highlight boxes showing what to click in order."""
@@ -1527,13 +1587,13 @@ class TextureReplacer:
                 if replacement_size is None:
                     replacement_size = os.path.getsize(replacement_texture_path)
 
-            input_textures_folder = os.path.join(pcvr_input_folder, "beac1969cb7b8861")
-            input_corresponding_folder = os.path.join(pcvr_input_folder, "4a4c32c49300b8a0")
+            input_textures_folder = os.path.join(pcvr_input_folder, PCVR_TEXTURE_ID)
+            input_corresponding_folder = os.path.join(pcvr_input_folder, PCVR_METADATA_ID)
             os.makedirs(input_textures_folder, exist_ok=True)
             os.makedirs(input_corresponding_folder, exist_ok=True)
 
             texture_name = os.path.basename(original_texture_path)
-            output_corresponding_file = os.path.join(output_folder, "4a4c32c49300b8a0", texture_name)
+            output_corresponding_file = os.path.join(output_folder, PCVR_METADATA_ID, texture_name)
             input_texture_path = os.path.join(input_textures_folder, texture_name)
             input_corresponding_path = os.path.join(input_corresponding_folder, texture_name)
 
@@ -1556,8 +1616,8 @@ class TextureReplacer:
     @staticmethod
     def replace_quest_texture(output_folder, quest_input_folder, original_texture_path, replacement_texture_path, texture_cache):
         try:
-            input_textures_folder = os.path.join(quest_input_folder, "489b7b69cb19e0e9")
-            input_corresponding_folder = os.path.join(quest_input_folder, "e2ef0854d0cd69b8")
+            input_textures_folder = os.path.join(quest_input_folder, QUEST_TEXTURE_ID)
+            input_corresponding_folder = os.path.join(quest_input_folder, QUEST_METADATA_ID)
             os.makedirs(input_textures_folder, exist_ok=True)
             os.makedirs(input_corresponding_folder, exist_ok=True)
             
@@ -1585,16 +1645,12 @@ class TextureReplacer:
             
             if not success: return False, "Failed to encode/find texture info"
             
-            dest_texture_path = os.path.join(dest_textures_folder, texture_name)
-            shutil.copy2(temp_output, dest_texture_path)
             input_texture_path = os.path.join(input_textures_folder, texture_name)
             shutil.copy2(temp_output, input_texture_path)
             final_size = os.path.getsize(temp_output)
             
-            dest_corresponding_path = os.path.join(dest_corresponding_folder, texture_name)
-            if os.path.exists(dest_corresponding_path):
-                TextureReplacer.hex_edit_file_size(dest_corresponding_path, final_size)
-            output_corresponding_file = os.path.join(output_folder, "e2ef0854d0cd69b8", texture_name)
+            # Update corresponding metadata file size
+            output_corresponding_file = os.path.join(output_folder, QUEST_METADATA_ID, texture_name)
             if os.path.exists(output_corresponding_file):
                 input_corresponding_path = os.path.join(input_corresponding_folder, texture_name)
                 shutil.copy2(output_corresponding_file, input_corresponding_path)
@@ -1963,9 +2019,11 @@ class EchoVRTextureViewer:
         
         self.extract_btn = tk.Button(button_frame, text="Extract Package", command=self.extract_package, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=20, pady=8, state=tk.DISABLED)
         self.extract_btn.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.extract_btn, "Extract game assets from the selected package so they can be viewed and edited.")
         
         self.repack_btn = tk.Button(button_frame, text="Repack Modified", command=self.repack_package, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=20, pady=8, state=tk.DISABLED)
         self.repack_btn.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.repack_btn, "Build a new package containing your modified textures.")
 
         self.evr_status_label = tk.Label(evr_frame, text="Ready", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
         self.evr_status_label.grid(row=3, column=0, columnspan=3, pady=(0, 10))
@@ -2058,12 +2116,15 @@ class EchoVRTextureViewer:
         
         self.replace_btn = tk.Button(action_frame, text="Replace Texture", command=self.replace_texture, bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5, state=tk.DISABLED)
         self.replace_btn.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.replace_btn, "Apply the replacement image to the selected texture.")
         
         self.download_btn = tk.Button(action_frame, text="Download All Textures", command=self.download_textures, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5)
         self.download_btn.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.download_btn, "Download a pre-generated cache of all textures (approx 400MB). Recommended for first time users.")
         
         self.load_all_btn = tk.Button(action_frame, text="Load/Cache All", command=self.load_all_textures, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5)
         self.load_all_btn.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.load_all_btn, "Process all textures in the current folder to generate thumbnails. May take a while.")
         
         self.resolution_status = tk.Label(button_panel, text="", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
         
@@ -2230,8 +2291,7 @@ class EchoVRTextureViewer:
         except: pass
 
         tk.Label(popup, text="Select Extraction Mode", font=("Arial", 12, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_medium']).pack(pady=(20, 10))
-        tk.Label(popup, text="Full Package extraction is required for repacking.", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_medium']).pack(pady=(0, 20))
-        tk.Label(popup, text="Texture mode is faster but only extracts texture files.", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_medium']).pack(pady=(0, 20))
+        tk.Label(popup, text="Textures Only is faster and is recommended.", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_medium']).pack(pady=(0, 5))
 
         btn_frame = tk.Frame(popup, bg=self.colors['bg_medium'])
         btn_frame.pack(fill=tk.X, padx=20)
@@ -2240,10 +2300,8 @@ class EchoVRTextureViewer:
             popup.destroy()
             self._run_extraction(textures_only)
 
-        tk.Button(btn_frame, text="Extract Full Package (For Repacking)", command=lambda: do_extract(False), bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED).pack(fill=tk.X, pady=5)
-        tk.Button(btn_frame, text="Extract Textures Only (For Viewing)", command=lambda: do_extract(True), bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9), relief=tk.RAISED).pack(fill=tk.X, pady=5)
-        tk.Button(btn_frame, text="Extract Textures Only (Fast)", command=lambda: do_extract(True), bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED).pack(fill=tk.X, pady=5)
-        tk.Button(btn_frame, text="Extract Full Package (Slow)", command=lambda: do_extract(False), bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9), relief=tk.RAISED).pack(fill=tk.X, pady=5)
+        tk.Button(btn_frame, text="Extract Textures Only (Recommended)", command=lambda: do_extract(True), bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED).pack(fill=tk.X, pady=5)
+        tk.Button(btn_frame, text="Extract Full Package", command=lambda: do_extract(False), bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 10), relief=tk.RAISED).pack(fill=tk.X, pady=5)
 
     def _run_extraction(self, textures_only):
         os.makedirs(self.extracted_folder, exist_ok=True)
@@ -2281,8 +2339,7 @@ class EchoVRTextureViewer:
             messagebox.showerror("Extraction Error", message)
     
     def find_extracted_textures(self, base_dir):
-        target_names = {"-4707359568332879775", "5231972605540061417"}
-        target_names = {"beac1969cb7b8861", "489b7b69cb19e0e9"}
+        target_names = {PCVR_TEXTURE_ID, QUEST_TEXTURE_ID}
         for root, dirs, _ in os.walk(base_dir):
             for d in dirs:
                 if d in target_names:
@@ -2502,48 +2559,39 @@ class EchoVRTextureViewer:
         if "quest" in folder_name:
             self.is_quest_textures = True
             self.is_pcvr_textures = False
-            self.textures_folder = os.path.join(path, "5231972605540061417")
-            self.corresponding_folder = os.path.join(path, "-2094201140079393352")
-            self.textures_folder = os.path.join(path, "489b7b69cb19e0e9")
-            self.corresponding_folder = os.path.join(path, "e2ef0854d0cd69b8")
+            self.textures_folder = os.path.join(path, QUEST_TEXTURE_ID)
+            self.corresponding_folder = os.path.join(path, QUEST_METADATA_ID)
             self.platform_label.config(text="Platform: Quest (ASTC)", fg=self.colors['success'])
             self.log_info("🎯 Switched to Quest mode")
         elif "pcvr" in folder_name:
             self.is_quest_textures = False
             self.is_pcvr_textures = True
-            self.textures_folder = os.path.join(path, "-4707359568332879775")
-            self.corresponding_folder = os.path.join(path, "5353709876897953952")
-            self.textures_folder = os.path.join(path, "beac1969cb7b8861")
-            self.corresponding_folder = os.path.join(path, "4a4c32c49300b8a0")
+            self.textures_folder = os.path.join(path, PCVR_TEXTURE_ID)
+            self.corresponding_folder = os.path.join(path, PCVR_METADATA_ID)
             self.platform_label.config(text="Platform: PCVR (DDS)", fg=self.colors['accent_blue'])
             self.push_quest_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
             self.log_info("🎮 Switched to PCVR mode")
         else:
-            quest_textures_folder = os.path.join(path, "5231972605540061417")
-            pcvr_textures_folder = os.path.join(path, "-4707359568332879775")
-            quest_textures_folder = os.path.join(path, "489b7b69cb19e0e9")
-            pcvr_textures_folder = os.path.join(path, "beac1969cb7b8861")
+            quest_textures_folder = os.path.join(path, QUEST_TEXTURE_ID)
+            pcvr_textures_folder = os.path.join(path, PCVR_TEXTURE_ID)
+            
             if getattr(sys, 'frozen', False):
                 parent_dir = os.path.dirname(os.path.dirname(path))
                 if not os.path.exists(quest_textures_folder):
-                    quest_textures_folder = os.path.join(parent_dir, os.path.basename(path), "5231972605540061417")
-                    quest_textures_folder = os.path.join(parent_dir, os.path.basename(path), "489b7b69cb19e0e9")
+                    quest_textures_folder = os.path.join(parent_dir, os.path.basename(path), QUEST_TEXTURE_ID)
                 if not os.path.exists(pcvr_textures_folder):
-                    pcvr_textures_folder = os.path.join(parent_dir, os.path.basename(path), "-4707359568332879775")
-                    pcvr_textures_folder = os.path.join(parent_dir, os.path.basename(path), "beac1969cb7b8861")
+                    pcvr_textures_folder = os.path.join(parent_dir, os.path.basename(path), PCVR_TEXTURE_ID)
             
             if os.path.exists(quest_textures_folder):
                 self.textures_folder = quest_textures_folder
-                self.corresponding_folder = os.path.join(path, "-2094201140079393352")
-                self.corresponding_folder = os.path.join(path, "e2ef0854d0cd69b8")
+                self.corresponding_folder = os.path.join(path, QUEST_METADATA_ID)
                 self.is_quest_textures = True
                 self.is_pcvr_textures = False
                 self.platform_label.config(text="Platform: Quest (ASTC)", fg=self.colors['success'])
                 self.log_info("🎯 Auto-detected Quest textures")
             elif os.path.exists(pcvr_textures_folder):
                 self.textures_folder = pcvr_textures_folder
-                self.corresponding_folder = os.path.join(path, "5353709876897953952")
-                self.corresponding_folder = os.path.join(path, "4a4c32c49300b8a0")
+                self.corresponding_folder = os.path.join(path, PCVR_METADATA_ID)
                 self.is_quest_textures = False
                 self.is_pcvr_textures = True
                 self.platform_label.config(text="Platform: PCVR (DDS)", fg=self.colors['accent_blue'])
