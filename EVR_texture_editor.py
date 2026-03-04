@@ -2987,8 +2987,8 @@ class EchoVRTextureViewer:
             texture_name = self.filtered_textures[index]
             current_texture_path = os.path.join(self.textures_folder, texture_name)
             if self.is_quest_textures:
-                return texture_name, TextureReplacer.replace_quest_texture(self.extracted_folder, current_texture_path, self.replacement_texture, self.texture_cache)
-            return texture_name, TextureReplacer.replace_pcvr_texture(self.extracted_folder, current_texture_path, self.replacement_texture, replacement_size)
+                return texture_name, TextureReplacer.replace_quest_texture(self.extracted_folder, self.quest_input_folder, current_texture_path, self.replacement_texture, self.texture_cache)
+            return texture_name, TextureReplacer.replace_pcvr_texture(self.extracted_folder, self.pcvr_input_folder, current_texture_path, self.replacement_texture, replacement_size)
 
         results = []
         if len(selection) > 3:
