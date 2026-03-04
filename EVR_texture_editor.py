@@ -75,6 +75,7 @@ CACHE_DIR = get_cache_dir()  # Store cache in Settings folder for persistence (o
 CACHE2_FILE = get_settings_path("cache2.json")
 LEGACY_CACHE_FILE = get_settings_path("cache.json")
 MAPPING_FILE = get_settings_path("texture_mapping.json")
+NAMES_FILE = get_settings_path("names.json")
 
 # --- CONSTANTS ---
 PCVR_TEXTURE_ID = "beac1969cb7b8861"
@@ -276,6 +277,59 @@ class ConfigManager:
                 json.dump(config, f, indent=4)
         except Exception as e:
             print(f"Config save error: {e}")
+
+class NameManager:
+    def __init__(self, path):
+        self.mapping = {}
+        self.load_names(path)
+
+    def load_names(self, path):
+        if not os.path.exists(path):
+            return
+
+        def is_hash(s):
+            if not isinstance(s, str) or len(s) < 12:
+                return False
+            return all(c in '0123456789abcdef' for c in s.lower())
+
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            if isinstance(data, dict):
+                for category, items in data.items():
+                    if isinstance(items, list):
+                        unnamed_counter = 1
+                        i = 0
+                        while i < len(items):
+                            hash_key = items[i]
+                            
+                            if (i + 1) < len(items) and not is_hash(items[i+1]):
+                                name = items[i+1]
+                                self.mapping[hash_key.lower()] = name
+                                i += 2
+                            else:
+                                if hash_key.lower() not in self.mapping:
+                                    category_base = category[:-1] if category.endswith('s') else category
+                                    category_base = category_base.replace('_', ' ').title()
+                                    self.mapping[hash_key.lower()] = f"{category_base} {unnamed_counter}"
+                                    unnamed_counter += 1
+                                i += 1
+        except Exception as e:
+            print(f"Error loading names.json: {e}")
+
+    def get_name(self, filename):
+        # Normalize filename (lowercase, remove extension)
+        filename_lower = filename.lower()
+        base_name = os.path.splitext(filename_lower)[0]
+        
+        # Check mapping
+        if base_name in self.mapping:
+            return self.mapping[base_name]
+        if filename_lower in self.mapping:
+            return self.mapping[filename_lower]
+            
+        return filename
 
 class ToolTip(object):
     """
@@ -1829,6 +1883,9 @@ class TextureGridPopup:
             btn.pack()
             
             label = tk.Label(frame, text=filename[:12]+"...", font=("Arial", 8), fg='#aaaaaa', bg='#333333')
+            display_name = self.app.name_manager.get_name(filename)
+            label_text = display_name[:15] + "..." if len(display_name) > 15 else display_name
+            label = tk.Label(frame, text=label_text, font=("Arial", 8), fg='#aaaaaa', bg='#333333')
             label.pack(fill=tk.X)
         except Exception:
             pass
@@ -1888,6 +1945,7 @@ class EchoVRTextureViewer:
         self.is_downloading = False
         
         self.ensure_settings_folders()
+        self.name_manager = NameManager(NAMES_FILE)
         self.setup_ui()
         self.auto_detect_folders()
         self.check_external_tools()
@@ -2157,7 +2215,7 @@ class EchoVRTextureViewer:
         try:
             # Get the current visible range
             visible_items = self.file_list.yview()
-            if visible_items[1] > 0.9:  # Top 90% of the scrollbar
+            if visible_items[1] > 0.9:  # Bottom 10% of the scrollbar
                 # Load more items if available
                 current_count = self.file_list.size()
                 total_available = len(self.filtered_textures)
@@ -2174,12 +2232,15 @@ class EchoVRTextureViewer:
                     for i in range(current_count - 1, next_items):
                         if i >= 0:
                             self.file_list.insert(tk.END, self.filtered_textures[i])
+                            display_name = self.name_manager.get_name(self.filtered_textures[i])
+                            self.file_list.insert(tk.END, display_name)
                     # Add indicator if more remain
                     if next_items < total_available:
                         remaining = total_available - next_items
                         self.file_list.insert(tk.END, f"[Loading {remaining} more items...]")
         except:
             pass
+        pass
     
     
     def select_data_folder(self):
@@ -2612,20 +2673,20 @@ class EchoVRTextureViewer:
     
     def filter_textures(self, event=None):
         search_text = self.search_var.get().lower()
+        self.file_list.delete(0, tk.END)
+        self.filtered_textures = []
+        
         if not search_text:
             self.filtered_textures = self.all_textures.copy()
         else:
-            self.filtered_textures = [texture for texture in self.all_textures if search_text in texture.lower()]
-        self.file_list.delete(0, tk.END)
-        # Load textures in chunks to avoid UI freeze
-        if self.filtered_textures:
-            chunk_size = 500
-            for i in range(0, min(len(self.filtered_textures), chunk_size)):
-                self.file_list.insert(tk.END, self.filtered_textures[i])
-            
-            # Show indicator if there are more
-            if len(self.filtered_textures) > chunk_size:
-                self.file_list.insert(tk.END, f"... ({len(self.filtered_textures) - chunk_size} more items - scroll to load)")
+            for texture in self.all_textures:
+                display_name = self.name_manager.get_name(texture)
+                if search_text in texture.lower() or search_text in display_name.lower():
+                    self.filtered_textures.append(texture)
+        
+        for texture in self.filtered_textures:
+            display_name = self.name_manager.get_name(texture)
+            self.file_list.insert(tk.END, display_name)
     
     def clear_search(self):
         self.search_var.set("")
@@ -2696,16 +2757,10 @@ class EchoVRTextureViewer:
         self.all_textures = sorted(files)
         self.filtered_textures = self.all_textures.copy()
         self.file_list.delete(0, tk.END)
-        if self.filtered_textures:
-            # Load first batch to avoid UI freeze with large texture counts
-            chunk_size = 500
-            for i in range(0, min(len(self.filtered_textures), chunk_size)):
-                self.file_list.insert(tk.END, self.filtered_textures[i])
-            
-            # Show indicator if there are more items
-            if len(self.filtered_textures) > chunk_size:
-                remaining = len(self.filtered_textures) - chunk_size
-                self.file_list.insert(tk.END, f"[Scroll down to load {remaining} more items]")
+        
+        for texture in self.filtered_textures:
+            display_name = self.name_manager.get_name(texture)
+            self.file_list.insert(tk.END, display_name)
         
         # Cleanup cache to prevent disk bloat
         TextureLoader.cleanup_cache()
@@ -2873,6 +2928,10 @@ class EchoVRTextureViewer:
             if 'width' in self.original_info:
                 info += f"Dim: {self.original_info['width']} x {self.original_info['height']}\n"
             info += f"Format: {self.original_info['format']}\n\n"
+            
+            mapped_name = self.name_manager.get_name(os.path.basename(self.current_texture))
+            if mapped_name != os.path.basename(self.current_texture):
+                info += f"Name: {mapped_name}\n\n"
         
         if self.replacement_info:
             info += "=== REPLACEMENT ===\n"
