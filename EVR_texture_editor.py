@@ -8,7 +8,7 @@ import tempfile
 import subprocess
 import threading
 import json
-import glob
+import glob  
 import time
 import zipfile
 import urllib.request
@@ -705,6 +705,8 @@ Always create a backup before proceeding."""
 
         self.update_pkg_btn = tk.Button(btn_frame, text="📦 Update Packages", command=self.start_update_thread, bg='#007aff', fg='#ffffff', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=10)
         self.update_pkg_btn.pack(side=tk.LEFT, padx=5)
+
+
         
         self.backup_status = tk.Label(backup_frame, text="Checking backup status...", font=("Arial", 9), fg="#ffcc00", bg='#1a1a1a')
         self.backup_status.pack()
@@ -921,6 +923,419 @@ Always create a backup before proceeding."""
         else:
             messagebox.showerror("Error", f"Failed to update packages:\n{result}")
             self.backup_status.config(text="Update failed", fg="#ff3b30")
+
+
+class ModificationsViewerPopup:
+    """Shows modified textures with checkboxes + a live thumbnail grid. Metadata is hidden
+    but automatically toggled alongside its paired texture file."""
+
+    TEXTURE_IDS = {PCVR_TEXTURE_ID, QUEST_TEXTURE_ID}
+    METADATA_IDS = {PCVR_METADATA_ID, QUEST_METADATA_ID}
+    TEXTURE_TO_META = {
+        PCVR_TEXTURE_ID: PCVR_METADATA_ID,
+        QUEST_TEXTURE_ID: QUEST_METADATA_ID,
+    }
+
+    def __init__(self, parent, app):
+        self.parent = parent
+        self.app = app
+
+        self.popup = tk.Toplevel(parent)
+        self.popup.title("View Existing Modifications")
+        self.popup.geometry("1100x600")
+        self.popup.configure(bg='#1a1a1a')
+        self.popup.resizable(True, True)
+        self.popup.transient(parent)
+        self.popup.grab_set()
+
+        try:
+            x = parent.winfo_x() + (parent.winfo_width() - 1100) // 2
+            y = parent.winfo_y() + (parent.winfo_height() - 600) // 2
+            self.popup.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+        self._platforms = self._resolve_platforms()
+        self._status_var = tk.StringVar(value="")
+        self._loaded_images = {}
+        self._thumb_size = 120
+        self._all_items = []
+        self._row_widgets = {}
+        # Keyed by (plat_label, rel_path) → (BooleanVar, list_label, input_dir, backup_dir)
+        self._key_to_toggle = {}
+
+        self._build_ui()
+
+    # ── Platform resolution ──────────────────────────────────────────────
+    def _resolve_platforms(self):
+        base = get_base_dir()
+        settings_dir = os.path.join(base, SETTINGS_DIR_NAME)
+        backups_root = os.path.join(settings_dir, "mod_backups")
+        pcvr_dir = getattr(self.app, 'pcvr_input_folder', None) or os.path.join(settings_dir, "input-pcvr")
+        quest_dir = getattr(self.app, 'quest_input_folder', None) or os.path.join(settings_dir, "input-quest")
+        is_pcvr = getattr(self.app, 'is_pcvr_textures', False)
+        is_quest = getattr(self.app, 'is_quest_textures', False)
+        if is_pcvr and not is_quest:
+            return [("PCVR", pcvr_dir, os.path.join(backups_root, "pcvr"))]
+        elif is_quest and not is_pcvr:
+            return [("Quest", quest_dir, os.path.join(backups_root, "quest"))]
+        else:
+            return [
+                ("PCVR", pcvr_dir, os.path.join(backups_root, "pcvr")),
+                ("Quest", quest_dir, os.path.join(backups_root, "quest")),
+            ]
+
+    # ── File scanning ────────────────────────────────────────────────────
+    def _scan_all(self, input_dir, backup_dir):
+        """Walk input_dir and backup_dir; return dict with 'Textures' and 'Misc' keys.
+        Metadata files are intentionally excluded from the returned dict.
+        Each entry: (rel_path, enabled:bool, abs_path)
+        """
+        cats = {'Textures': [], 'Misc': []}
+        seen = set()
+        for (root_dir, enabled) in [(input_dir, True), (backup_dir, False)]:
+            if not os.path.isdir(root_dir):
+                continue
+            for dirpath, _, filenames in os.walk(root_dir):
+                for fname in filenames:
+                    abs_path = os.path.join(dirpath, fname)
+                    rel_path = os.path.relpath(abs_path, root_dir)
+                    if rel_path in seen:
+                        continue
+                    seen.add(rel_path)
+                    top = rel_path.split(os.sep)[0] if os.sep in rel_path else ""
+                    if top in self.METADATA_IDS:
+                        continue  # hide metadata from UI
+                    if top in self.TEXTURE_IDS:
+                        cats['Textures'].append((rel_path, enabled, abs_path))
+                    else:
+                        cats['Misc'].append((rel_path, enabled, abs_path))
+        cats['Textures'].sort()
+        cats['Misc'].sort()
+        return cats
+
+    def _find_paired_meta(self, tex_rel, input_dir, backup_dir, currently_enabled):
+        """Return (meta_rel_path, absolute_path) of the paired metadata file, or (None, None)."""
+        parts = tex_rel.split(os.sep)
+        meta_folder = self.TEXTURE_TO_META.get(parts[0]) if parts else None
+        if not meta_folder:
+            return None, None
+        meta_rel = os.path.join(meta_folder, *parts[1:])
+        check_dir = input_dir if currently_enabled else backup_dir
+        candidate = os.path.join(check_dir, meta_rel)
+        if os.path.exists(candidate):
+            return meta_rel, candidate
+        return None, None
+
+    # ── UI ───────────────────────────────────────────────────────────────
+    def _build_ui(self):
+        # Header
+        hdr = tk.Frame(self.popup, bg='#1a1a1a')
+        hdr.pack(fill=tk.X, padx=14, pady=(12, 6))
+        tk.Label(hdr, text="Existing Modifications", font=("Arial", 13, "bold"),
+                 fg="#4cd964", bg='#1a1a1a').pack(side=tk.LEFT)
+        tk.Label(hdr, text="   Uncheck to disable · check to re-enable   (metadata moves automatically)",
+                 font=("Arial", 9), fg="#aaaaaa", bg='#1a1a1a').pack(side=tk.LEFT)
+
+        # Split pane: left list | right grid
+        pane = tk.Frame(self.popup, bg='#1a1a1a')
+        pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 4))
+        pane.columnconfigure(0, weight=0, minsize=300)
+        pane.columnconfigure(1, weight=1)
+        pane.rowconfigure(0, weight=1)
+
+        # ---- Left: scrollable checklist ----
+        list_outer = tk.Frame(pane, bg='#242424', relief=tk.GROOVE, bd=1)
+        list_outer.grid(row=0, column=0, sticky='nsew', padx=(0, 6))
+        list_canvas = tk.Canvas(list_outer, bg='#242424', highlightthickness=0, width=290)
+        list_sb = tk.Scrollbar(list_outer, orient="vertical", command=list_canvas.yview)
+        self._list_frame = tk.Frame(list_canvas, bg='#242424')
+        self._list_frame.bind("<Configure>",
+            lambda e: list_canvas.configure(scrollregion=list_canvas.bbox("all")))
+        list_canvas.create_window((0, 0), window=self._list_frame, anchor="nw")
+        list_canvas.configure(yscrollcommand=list_sb.set)
+        list_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        list_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        list_canvas.bind("<MouseWheel>",
+            lambda e: list_canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        # ---- Right: thumbnail grid ----
+        grid_outer = tk.LabelFrame(pane, text=" Texture Preview ",
+                                   font=("Arial", 9, "bold"), fg="#4cd964",
+                                   bg='#1a1a1a', relief=tk.GROOVE, bd=1)
+        grid_outer.grid(row=0, column=1, sticky='nsew')
+        grid_canvas = tk.Canvas(grid_outer, bg='#1a1a1a', highlightthickness=0)
+        grid_sb = tk.Scrollbar(grid_outer, orient="vertical", command=grid_canvas.yview)
+        self._grid_frame = tk.Frame(grid_canvas, bg='#1a1a1a')
+        self._grid_frame.bind("<Configure>",
+            lambda e: grid_canvas.configure(scrollregion=grid_canvas.bbox("all")))
+        grid_canvas.create_window((0, 0), window=self._grid_frame, anchor="nw")
+        grid_canvas.configure(yscrollcommand=grid_sb.set)
+        grid_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        grid_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        grid_canvas.bind("<MouseWheel>",
+            lambda e: grid_canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        # Populate left list and collect all items for the grid
+        any_files = False
+        for (plat_label, input_dir, backup_dir) in self._platforms:
+            cats = self._scan_all(input_dir, backup_dir)
+            total = sum(len(v) for v in cats.values())
+            if total == 0:
+                continue
+            any_files = True
+            self._build_list_section(plat_label, cats, input_dir, backup_dir)
+            for cat_items in cats.values():
+                for it in cat_items:
+                    # key = (plat_label, rel_path) to avoid cross-platform collisions
+                    self._all_items.append(it + (input_dir, backup_dir, plat_label))
+
+        if not any_files:
+            tk.Label(self._list_frame, text="No texture modifications found.",
+                     font=("Arial", 10), fg="#888888", bg='#242424').pack(pady=30, padx=10)
+
+        # Bottom bar
+        bot = tk.Frame(self.popup, bg='#1a1a1a')
+        bot.pack(fill=tk.X, padx=10, pady=(2, 8))
+        tk.Label(bot, textvariable=self._status_var, font=("Arial", 9), fg="#4cd964",
+                 bg='#1a1a1a', anchor="w", wraplength=900).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Button(bot, text="Close", command=self.popup.destroy,
+                  bg='#4a4a4a', fg='#ffffff', font=("Arial", 9, "bold"),
+                  relief=tk.RAISED, bd=2, padx=20, pady=5).pack(side=tk.RIGHT)
+
+        if self._all_items:
+            self.popup.after(200, self._load_grid_thumbnails)
+
+    def _build_list_section(self, plat_label, cats, input_dir, backup_dir):
+        """Build a platform section with Textures and Misc sub-sections."""
+        section = tk.LabelFrame(self._list_frame, text=f"  {plat_label}  ",
+                                font=("Arial", 9, "bold"), fg="#ffffff",
+                                bg='#242424', relief=tk.GROOVE, bd=1)
+        section.pack(fill=tk.X, padx=4, pady=4)
+
+        for cat_name in ('Textures', 'Misc'):
+            items = cats.get(cat_name, [])
+            if not items:
+                continue
+            cat_lbl = tk.Label(section,
+                               text=f"{cat_name} ({sum(1 for r, e, a in items if e)} enabled / {len(items)} total)",
+                               font=("Arial", 8, "bold"), fg="#4cd964", bg='#242424', anchor='w')
+            cat_lbl.pack(fill=tk.X, padx=6, pady=(4, 0))
+            for (rel_path, enabled, _abs) in items:
+                row = tk.Frame(section, bg='#242424')
+                row.pack(fill=tk.X, padx=8, pady=1)
+                var = tk.BooleanVar(value=enabled)
+                lbl = tk.Label(row, text=os.path.basename(rel_path), font=("Arial", 9),
+                               anchor='w', fg='#cccccc' if enabled else '#888888', bg='#242424')
+                lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+                ToolTip(lbl, rel_path)
+                tk.Checkbutton(row, variable=var, bg='#242424', activebackground='#242424',
+                               selectcolor='#1a1a1a',
+                               command=lambda rp=rel_path, v=var, l=lbl,
+                                              inp=input_dir, bkp=backup_dir:
+                                   self._toggle_mod(rp, v, l, inp, bkp)
+                               ).pack(side=tk.RIGHT)
+                self._row_widgets[rel_path] = lbl
+                # Store toggle state so thumbnail clicks can trigger the same action
+                self._key_to_toggle[(plat_label, rel_path)] = (var, lbl, input_dir, backup_dir)
+
+    # ── Move logic ───────────────────────────────────────────────────────
+    def _click_thumb(self, key):
+        """Called when the user clicks a thumbnail in the grid.
+        key = (plat_label, rel_path).  Looks up the corresponding BooleanVar
+        and list-label, flips the toggle, then delegates to _toggle_mod.
+        """
+        state = self._key_to_toggle.get(key)
+        if state is None:
+            return
+        var, lbl, input_dir, backup_dir = state
+        # Flip the var (simulates checking/unchecking the list checkbox)
+        var.set(not var.get())
+        self._toggle_mod(key[1], var, lbl, input_dir, backup_dir)
+
+    def _move_file(self, rel_path, enabling, input_dir, backup_dir):
+        """Move rel_path from backup→input (enabling=True) or input→backup (enabling=False).
+        Returns True on success."""
+        src = os.path.join(backup_dir if enabling else input_dir, rel_path)
+        dst = os.path.join(input_dir if enabling else backup_dir, rel_path)
+        if not os.path.exists(src):
+            return False
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.move(src, dst)
+        # Prune empty dirs from input side when disabling
+        if not enabling:
+            p = os.path.dirname(os.path.join(input_dir, rel_path))
+            while os.path.normpath(p) != os.path.normpath(input_dir):
+                try:
+                    if not os.listdir(p):
+                        os.rmdir(p)
+                    else:
+                        break
+                except OSError:
+                    break
+                p = os.path.dirname(p)
+        return True
+
+    def _toggle_mod(self, rel_path, var, lbl_widget, input_dir, backup_dir):
+        enabling = var.get()  # True = user just checked it (wants it enabled)
+        # Before the move, the file was in the opposite location
+        was_enabled = not enabling
+        try:
+            if not self._move_file(rel_path, enabling, input_dir, backup_dir):
+                self._status_var.set(f"⚠ Source not found: {os.path.basename(rel_path)}")
+                var.set(was_enabled)
+                return
+            # Auto-move paired metadata
+            meta_rel, _ = self._find_paired_meta(rel_path, input_dir, backup_dir, was_enabled)
+            if meta_rel:
+                try:
+                    self._move_file(meta_rel, enabling, input_dir, backup_dir)
+                except Exception:
+                    pass
+            action = "enabled" if enabling else "disabled"
+            self._status_var.set(f"✓ {os.path.basename(rel_path)} {action}.")
+            lbl_widget.config(fg='#cccccc' if enabling else '#888888')
+            self._refresh_grid()
+        except Exception as exc:
+            self._status_var.set(f"✗ Error: {exc}")
+            var.set(was_enabled)
+
+    # ── Thumbnail grid ───────────────────────────────────────────────────
+    def _clear_grid(self):
+        for w in self._grid_frame.winfo_children():
+            w.destroy()
+        self._loaded_images.clear()
+
+    def _refresh_grid(self):
+        self._clear_grid()
+        # Re-scan and collect only enabled textures+misc, keyed by (plat, rel_path) to avoid duplication
+        seen_keys = set()
+        enabled_items = []
+        for (plat_label, input_dir, backup_dir) in self._platforms:
+            cats = self._scan_all(input_dir, backup_dir)
+            for cat_items in cats.values():
+                for (rel_path, enabled, abs_path) in cat_items:
+                    if not enabled:
+                        continue
+                    key = (plat_label, rel_path)
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    enabled_items.append((key, abs_path))
+        if enabled_items:
+            threading.Thread(target=self._load_thumbs, args=(enabled_items,), daemon=True).start()
+        else:
+            tk.Label(self._grid_frame, text="No enabled modifications.",
+                     font=("Arial", 10), fg="#888888", bg='#1a1a1a'
+                     ).grid(row=0, column=0, padx=20, pady=20)
+
+    def _load_grid_thumbnails(self):
+        """Initial thumbnail load — only enabled textures+misc, deduplicated by (plat, rel_path)."""
+        seen_keys = set()
+        items = []
+        for (rp, en, ap, _inp, _bkp, plat) in self._all_items:
+            if not en:
+                continue
+            key = (plat, rp)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            items.append((key, ap))
+        if not items:
+            self.popup.after(0, lambda: tk.Label(
+                self._grid_frame, text="No enabled modifications to preview.",
+                font=("Arial", 10), fg="#888888", bg='#1a1a1a'
+            ).grid(row=0, column=0, padx=20, pady=20))
+            return
+        threading.Thread(target=self._load_thumbs, args=(items,), daemon=True).start()
+
+    def _load_thumbs(self, items):
+        """Background thread: load each texture and place contiguously in the grid.
+        items = list of ((plat, rel_path), abs_path)
+        Uses display_idx (not item idx) so skipped files never create gaps.
+        """
+        COLS = 4
+        display_idx = 0
+        for (key, abs_path) in items:
+            if not os.path.exists(abs_path):
+                continue
+            try:
+                img = self._read_texture_direct(abs_path)
+                if img is None:
+                    continue
+                img.thumbnail((self._thumb_size, self._thumb_size), Image.Resampling.LANCZOS)
+                r, c = divmod(display_idx, COLS)
+                rel_path = key[1]  # rel_path part of the key tuple
+                self.popup.after(0, lambda i=img, k=key, row=r, col=c:
+                                 self._add_thumb(i, k, row, col))
+                display_idx += 1
+            except Exception:
+                continue
+
+    def _read_texture_direct(self, abs_path):
+        """Load a texture file skipping texture_cache. Returns PIL Image or None."""
+        try:
+            return Image.open(abs_path).convert("RGBA")
+        except Exception:
+            pass
+        # Fallback: texconv for BC6/BC7 formats
+        texconv_path = get_tool_path("texconv.exe")
+        if texconv_path and os.path.exists(texconv_path):
+            try:
+                with tempfile.TemporaryDirectory(prefix="modview_") as tmp:
+                    tmp_in = os.path.join(tmp, os.path.basename(abs_path))
+                    shutil.copy2(abs_path, tmp_in)
+                    run_hidden_command([texconv_path, "-ft", "png", "-o", tmp, "-y", tmp_in], timeout=15)
+                    out = os.path.join(tmp, os.path.splitext(os.path.basename(tmp_in))[0] + ".png")
+                    if os.path.exists(out):
+                        return Image.open(out).convert("RGBA")
+            except Exception:
+                pass
+        return None
+
+    def _add_thumb(self, img, key, row, col):
+        """key = (plat_label, rel_path). Click on the cell to toggle enable/disable."""
+        if not self.popup.winfo_exists():
+            return
+        try:
+            photo = ImageTk.PhotoImage(img)
+            self._loaded_images[key] = photo  # keyed by (plat, rel_path) — no collision
+
+            cell = tk.Frame(self._grid_frame, bg='#2a2a2a', relief=tk.GROOVE, bd=1,
+                            cursor='hand2')
+            cell.grid(row=row, column=col, padx=5, pady=5, sticky='n')
+
+            img_lbl = tk.Label(cell, image=photo, bg='#2a2a2a', borderwidth=0,
+                               cursor='hand2')
+            img_lbl.pack()
+
+            name = os.path.basename(key[1])
+            short = name[:14] + "\u2026" if len(name) > 14 else name
+            name_lbl = tk.Label(cell, text=short, font=("Arial", 8), fg='#aaaaaa',
+                                bg='#2a2a2a', cursor='hand2')
+            name_lbl.pack(fill=tk.X)
+            ToolTip(name_lbl, f"[{key[0]}] {key[1]}\nClick to enable/disable")
+
+            # Hover highlight
+            def _enter(e, c=cell):
+                c.config(bg='#3a3a3a')
+            def _leave(e, c=cell):
+                c.config(bg='#2a2a2a')
+            for w in (cell, img_lbl, name_lbl):
+                w.bind('<Enter>', _enter)
+                w.bind('<Leave>', _leave)
+
+            # Click = toggle enable/disable (same action as the list checkbox)
+            def _click(e, k=key):
+                self._click_thumb(k)
+            for w in (cell, img_lbl, name_lbl):
+                w.bind('<Button-1>', _click)
+
+        except Exception:
+            pass
+
+
+
 
 class ADBPlatformTools:
     @staticmethod
@@ -2042,9 +2457,12 @@ class EchoVRTextureViewer:
         
         title_label = tk.Label(header_frame, text="ECHO VR TEXTURE EDITOR", font=("Arial", 16, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'])
         title_label.pack(side=tk.LEFT, expand=True)
-        
+
         self.update_echo_btn = tk.Button(header_frame, text="⚠ Update EchoVR", command=lambda: UpdateEchoPopup(self.root, self, self.config), bg=self.colors['accent_red'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=8)
         self.update_echo_btn.pack(side=tk.RIGHT, padx=(10, 0))
+
+        self.share_mods_btn = tk.Button(header_frame, text="📤 Share Mods", command=self.share_modifications, bg='#4cd964', fg='#000000', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=8)
+        self.share_mods_btn.pack(side=tk.RIGHT, padx=(10, 0))
         
         self.status_label = tk.Label(main_frame, text="Welcome to EchoVR Texture Editor", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
         self.status_label.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 10))
@@ -2169,8 +2587,9 @@ class EchoVRTextureViewer:
         action_frame = tk.Frame(button_panel, bg=self.colors['bg_dark'])
         action_frame.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.edit_btn = tk.Button(action_frame, text="Open in Editor", command=self.open_external_editor, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5, state=tk.DISABLED)
-        self.edit_btn.pack(side=tk.LEFT, padx=5)
+        self.view_mods_btn = tk.Button(action_frame, text="View existing modifications", command=self.view_modifications, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5)
+        self.view_mods_btn.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.view_mods_btn, "View and manage all files currently staged as modifications.")
         
         self.replace_btn = tk.Button(action_frame, text="Replace Texture", command=self.replace_texture, bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5, state=tk.DISABLED)
         self.replace_btn.pack(side=tk.LEFT, padx=5)
@@ -2331,6 +2750,10 @@ class EchoVRTextureViewer:
         else:
             self.extract_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
             self.repack_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
+
+    def view_modifications(self):
+        """Open the modifications viewer popup."""
+        ModificationsViewerPopup(self.root, self)
     
     def extract_package(self):
         if not all([self.data_folder, self.package_name, self.extracted_folder]):
@@ -2430,7 +2853,7 @@ class EchoVRTextureViewer:
         # Popup for Repack Mode
         popup = tk.Toplevel(self.root)
         popup.title("Select Repack Mode")
-        popup.geometry("500x250")
+        popup.geometry("500x330")
         popup.configure(bg=self.colors['bg_medium'])
         popup.resizable(False, False)
         popup.transient(self.root)
@@ -2438,7 +2861,7 @@ class EchoVRTextureViewer:
         
         try:
             x = self.root.winfo_x() + (self.root.winfo_width() - 500) // 2
-            y = self.root.winfo_y() + (self.root.winfo_height() - 250) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - 330) // 2
             popup.geometry(f"+{x}+{y}")
         except: pass
 
@@ -2451,6 +2874,29 @@ class EchoVRTextureViewer:
             popup.destroy()
             self._run_repack(input_folder, quick)
 
+        def do_revert():
+            popup.destroy()
+            try:
+                manifest_dir = os.path.join(self.data_folder, "manifests")
+                packages_dir = os.path.join(self.data_folder, "packages")
+                
+                target_manifest = os.path.join(manifest_dir, "48037dc70b0ecab2")
+                backup_manifest = os.path.join(manifest_dir, "48037dc70b0ecab2.bak")
+                target_package = os.path.join(packages_dir, "48037dc70b0ecab2_3")
+                
+                if os.path.exists(target_manifest):
+                    os.remove(target_manifest)
+                
+                if os.path.exists(backup_manifest):
+                    os.rename(backup_manifest, target_manifest)
+                
+                if os.path.exists(target_package):
+                    os.remove(target_package)
+                    
+                messagebox.showinfo("Revert Complete", "Successfully reverted to backup!")
+            except Exception as e:
+                messagebox.showerror("Revert Error", f"Failed to revert backup:\n{str(e)}")
+
         # Full Repack Button
         full_btn = tk.Button(btn_frame, text="Full Repack (Standard)\nCreates new files in 'output-both' folder.\nSafe, leaves original files untouched.", 
                             command=lambda: do_repack(False), bg=self.colors['bg_light'], fg=self.colors['text_light'], 
@@ -2462,6 +2908,16 @@ class EchoVRTextureViewer:
                              command=lambda: do_repack(True), bg=self.colors['accent_orange'], fg=self.colors['text_light'], 
                              font=("Arial", 10, "bold"), relief=tk.RAISED, justify=tk.LEFT, padx=10, pady=5)
         quick_btn.pack(fill=tk.X, pady=5)
+
+        # Revert to backup Button (Conditional)
+        backup_manifest_path = os.path.join(self.data_folder, "manifests", "48037dc70b0ecab2.bak")
+
+        
+        if os.path.exists(backup_manifest_path):
+            revert_btn = tk.Button(btn_frame, text="Revert to Backup\nRestores the original files.\nDeletes your modifications.", 
+                                 command=do_revert, bg=self.colors['accent_red'], fg=self.colors['text_light'], 
+                                 font=("Arial", 10, "bold"), relief=tk.RAISED, justify=tk.LEFT, padx=10, pady=5)
+            revert_btn.pack(fill=tk.X, pady=5)
 
     def _run_repack(self, input_folder, quick_mode):
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -2570,6 +3026,44 @@ class EchoVRTextureViewer:
             self.test_adb_connection()
         else:
             self.push_quest_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
+
+    def share_modifications(self):
+        data_folder = self.config.get('data_folder')
+        if not data_folder or not os.path.exists(data_folder):
+            messagebox.showerror("Error", "Game data folder not found.\nPlease select your EchoVR data folder first.")
+            return
+        
+        manifest_src = os.path.join(data_folder, "manifests", "48037dc70b0ecab2")
+        package_src = os.path.join(data_folder, "packages", "48037dc70b0ecab2_3")
+        
+        missing = []
+        if not os.path.exists(manifest_src):
+            missing.append("manifests/48037dc70b0ecab2")
+        if not os.path.exists(package_src):
+            missing.append("packages/48037dc70b0ecab2_3")
+        
+        if missing:
+            messagebox.showerror("Share Error", f"Could not find the following required files:\n" + "\n".join(missing) + "\n\nPlease run Quick Repack first.")
+            return
+        
+        shared_mods_dir = get_settings_path("SharedMods")
+        try:
+            # Clear and recreate the SharedMods folder
+            if os.path.exists(shared_mods_dir):
+                shutil.rmtree(shared_mods_dir)
+            os.makedirs(shared_mods_dir, exist_ok=True)
+            
+            # Copy each file flat into SharedMods
+            shutil.copy2(manifest_src, os.path.join(shared_mods_dir, "48037dc70b0ecab2"))
+            shutil.copy2(package_src, os.path.join(shared_mods_dir, "48037dc70b0ecab2_3"))
+            
+            self.log_info(f"✓ Modifications shared to: {shared_mods_dir}")
+            messagebox.showinfo("Share Complete", f"Modification files copied to:\n{shared_mods_dir}\n\nSend the contents of this folder to others and ensure files are in correct place!")
+            
+            # Open folder in Explorer
+            os.startfile(shared_mods_dir)
+        except Exception as e:
+            messagebox.showerror("Share Error", f"Failed to share modifications:\n{str(e)}")
     
     def push_to_quest(self):
         if not self.output_folder:
