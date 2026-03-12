@@ -3247,6 +3247,23 @@ class EchoVRTextureViewer:
             print(f"Scan Error: {e}")
             self.root.after(0, lambda: self._on_textures_loaded([], 0))
 
+    def update_action_buttons(self):
+        selection = self.file_list.curselection()
+        if not selection:
+            self.replace_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'], text="Replace Texture")
+            self.edit_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
+            return
+
+        # Enable replace button if anything is selected
+        self.replace_btn.config(state=tk.NORMAL, bg=self.colors['accent_green'])
+        
+        if len(selection) > 1:
+            self.replace_btn.config(text=f"Replace {len(selection)} Files")
+            self.edit_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
+        else:
+            self.replace_btn.config(text="Replace Texture")
+            # Edit button is handled by display_texture_result to ensure it's loaded
+
     def _on_textures_loaded(self, files, count):
         self.all_textures = sorted(files)
         self.filtered_textures = self.all_textures.copy()
@@ -3274,16 +3291,15 @@ class EchoVRTextureViewer:
         
         # Multi-select: Show count if multiple
         selection = self.file_list.curselection()
+        self.update_action_buttons()
+        
         if len(selection) > 1:
             self.update_canvas_placeholder(self.original_canvas, f"{len(selection)} files selected")
-            self.replace_btn.config(state=tk.NORMAL, bg=self.colors['accent_green'], text=f"Replace {len(selection)} Files")
-            self.edit_btn.config(state=tk.DISABLED)
             return
 
         index = selection[0]
         texture_name = self.filtered_textures[index]
         self.current_texture = os.path.join(self.textures_folder, texture_name)
-        self.replace_btn.config(text="Replace Texture")
 
         try:
             self.update_canvas_placeholder(self.original_canvas, "Loading texture...")
@@ -3323,17 +3339,17 @@ class EchoVRTextureViewer:
             
             self.update_texture_info()
             self.edit_btn.config(state=tk.NORMAL, bg=self.colors['accent_blue'])
-            self.replace_btn.config(state=tk.NORMAL, bg=self.colors['accent_green'])
+            self.update_action_buttons()
         else:
             self.update_canvas_placeholder(self.original_canvas, "Failed to load texture")
             self.edit_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
-            self.replace_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
+            self.update_action_buttons()
     
     def display_texture_error(self, error):
         self.log_info(f"Error loading texture: {error}")
         self.update_canvas_placeholder(self.original_canvas, "Error loading texture")
         self.edit_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
-        self.replace_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
+        self.update_action_buttons()
     
     def browse_replacement_texture(self, event):
         if not self.current_texture and len(self.file_list.curselection()) == 0:
@@ -3386,6 +3402,7 @@ class EchoVRTextureViewer:
                     self.replacement_size = self.replacement_info.get('file_size')
             self.update_texture_info()
             self.check_resolution_match()
+            self.update_action_buttons()
             self.log_info(f"Replacement loaded: {os.path.basename(file_path)}")
         else:
             self.update_canvas_placeholder(self.replacement_canvas, "Failed to load replacement")
