@@ -80,11 +80,11 @@ NAMES_FILE = get_settings_path("names.json")
 # --- CONSTANTS ---
 PCVR_TEXTURE_ID = "beac1969cb7b8861"
 PCVR_METADATA_ID = "4a4c32c49300b8a0"
-QUEST_TEXTURE_ID = "489b7b69cb19e0e9"
-QUEST_METADATA_ID = "e2ef0854d0cd69b8"
+QUEST_TEXTURE_ID = "489bb35d53ca50e9"
+QUEST_METADATA_ID = "e2efe7289d5985b8"
 
 # App version for updates
-APP_VERSION = "2.0.0"
+APP_VERSION = "15.0.0"
 GITHUB_REPO = "heisthecat31/EchoVR-Texture-Editor"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
@@ -191,13 +191,30 @@ def run_hidden_command(cmd, cwd=None, timeout=None, capture_output=True):
 class TextureCacheManager:
     @staticmethod
     def load_cache():
+        # Try loading primary cache2.json
+        cache_data = {}
         if os.path.exists(CACHE2_FILE):
             try:
                 with open(CACHE2_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    cache_data = json.load(f)
             except Exception:
-                return {}
-        return {}
+                cache_data = {}
+        
+        # Migration logic: if cache2 is empty or missing, try importing from legacy cache.json
+        if not cache_data and os.path.exists(LEGACY_CACHE_FILE):
+            print("DEBUG: Migrating legacy cache.json to cache2.json")
+            try:
+                with open(LEGACY_CACHE_FILE, 'r', encoding='utf-8') as f:
+                    legacy_data = json.load(f)
+                    # Convert legacy structure if needed, or just adopt it
+                    if isinstance(legacy_data, dict):
+                        cache_data = legacy_data
+                        # Pre-emptively save to cache2.json
+                        TextureCacheManager.save_cache(cache_data)
+            except Exception as e:
+                print(f"DEBUG: Migration failed: {e}")
+        
+        return cache_data
 
     @staticmethod
     def save_cache(cache_data):
@@ -208,20 +225,34 @@ class TextureCacheManager:
             pass
 
     @staticmethod
-    def get_cached_files(folder_path):
+    def get_cached_files(folder_path, load_all=False):
         cache = TextureCacheManager.load_cache()
         if not cache: return None
         
+        # Use a distinct key when load_all is enabled to prevent mixing "primary-only" and "everything" lists
         norm_path = os.path.normpath(folder_path).lower()
+        key_suffix = "|all" if load_all else ""
+        cache_key = norm_path + key_suffix
+        
+        # Check for the specific key first
         for key in cache:
-            if os.path.normpath(key).lower() == norm_path:
-                return cache[key]
+            if os.path.normpath(key).lower() == cache_key:
+                data = cache[key]
+                # Backward compatibility: invalidate if old format (list of strings)
+                if data and isinstance(data, list) and len(data) > 0 and isinstance(data[0], str):
+                    return None
+                return data
+        
+        # If not found but we are in "all" mode, we might want to check the basic key as a fallback?
+        # No, "all" mode includes metadata files which might not be in the basic key.
         return None
 
     @staticmethod
-    def update_cache(folder_path, file_list):
+    def update_cache(folder_path, file_data, load_all=False):
         cache = TextureCacheManager.load_cache()
-        cache[os.path.normpath(folder_path)] = file_list
+        key_suffix = "|all" if load_all else ""
+        cache_key = os.path.normpath(folder_path) + key_suffix
+        cache[cache_key] = file_data
         TextureCacheManager.save_cache(cache)
 
 class ConfigManager:
@@ -243,7 +274,8 @@ class ConfigManager:
             'pcvr_input_folder': os.path.join(settings_dir, "input-pcvr"),
             'quest_input_folder': os.path.join(settings_dir, "input-quest"),
             'backup_folder': None,
-            'renderdoc_path': None
+            'renderdoc_path': None,
+            'load_all': False
         }
         
         try:
@@ -403,14 +435,14 @@ class TutorialPopup:
         if app is None:
             app = parent
         steps = [
-            ("data_folder_btn", "Step 1: Data Folder", "Click the **Select** button next to Data Folder to choose your EchoVR game folder (the one containing 'manifests' and 'packages')."),
-            ("extracted_folder_btn", "Step 2: Extracted Folder", "Click **Select** next to Extracted Folder to choose where extracted textures will be saved (e.g. a new empty folder)."),
-            ("extract_btn", "Step 3: Extract Package", "Click **Extract Package**. Choose 'Textures Only' for a fast extract, or 'Full Package' if you need everything."),
-            ("file_list", "Step 4: Texture List", "After extraction, textures appear here. Click one or more (Ctrl/Shift for multi-select) to choose which texture to replace."),
-            ("replacement_canvas", "Step 5: Replacement Texture", "Click the **right canvas** (Replacement area) to open a file picker and choose your replacement image (PNG/DDS)."),
-            ("replace_btn", "Step 6: Replace Texture", "Click **Replace Texture** to apply your replacement image to all selected textures. Files go to input-pcvr or input-quest."),
-            ("repack_btn", "Step 7: Repack Modified", "After editing, click **Repack Modified** to build the output. Use the default 'output-both' folder when asked."),
-            ("push_quest_btn", "Step 8: Deploy", "Quest: use **Push Files To Quest** to deploy. PCVR: use **Update EchoVR** in the header to copy files into your game folder."),
+            ("data_folder_btn", "Step 1: Data Folder", "Click the **Select** button next to Data Folder to choose your EchoVR game folder."),
+            ("extracted_folder_btn", "Step 2: Extracted Folder", "Click **Select** next to Extracted Folder to choose where assets will be saved."),
+            ("extract_btn", "Step 3: Extract Package", "Click **Extract Package**. 'Textures Only' is recommended for fast editing."),
+            ("file_list", "Step 4: Texture List", "Select textures here (Ctrl/Shift for multi-select)."),
+            ("replacement_canvas", "Step 5: Replacement Texture", "Click the **right canvas** to choose your replacement image."),
+            ("replace_btn", "Step 6: Replace Texture", "Click **Replace Texture** to apply changes. Modifications are staged in input-pcvr/quest folders."),
+            ("repack_btn", "Step 7: Repack Modified", "Click **Repack Modified** to apply changes to the game. Quick Repack updates your installation directly."),
+            ("push_quest_btn", "Step 8: Quest Deploy", "Quest users: use **Push Files To Quest** after repacking to deploy to your device."),
         ]
         panel = tk.Toplevel(parent)
         panel.title("Tutorial")
@@ -586,9 +618,10 @@ class ProgressDialog:
 class UpdateNotificationDialog:
     """Dialog for notifying user about app updates"""
     def __init__(self, parent, latest_version, download_url):
+        self.parent = parent
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("📥 Update Available")
-        self.dialog.geometry("500x250")
+        self.dialog.geometry("500x300")
         self.dialog.configure(bg='#1a1a1a')
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
@@ -597,7 +630,7 @@ class UpdateNotificationDialog:
         # Center on parent
         try:
             x = parent.winfo_x() + (parent.winfo_width() - 500) // 2
-            y = parent.winfo_y() + (parent.winfo_height() - 250) // 2
+            y = parent.winfo_y() + (parent.winfo_height() - 300) // 2
             self.dialog.geometry(f"+{x}+{y}")
         except:
             pass
@@ -607,12 +640,17 @@ class UpdateNotificationDialog:
                 fg="#4cd964", bg='#1a1a1a').pack(pady=(20, 10))
         
         # Version info
-        info_text = f"A new version is available!\n\nCurrent: v{APP_VERSION}\nLatest: v{latest_version}\n\nClick 'Download' to visit the releases page."
+        info_text = f"A new version is available!\n\nCurrent: v{APP_VERSION}\nLatest: v{latest_version}\n\nClick 'Update Now' to automatically update,\nor 'Download' to visit the releases page."
         tk.Label(self.dialog, text=info_text, font=("Arial", 10), fg="#cccccc", bg='#1a1a1a', justify=tk.LEFT).pack(pady=10, padx=20)
         
         # Buttons frame
         btn_frame = tk.Frame(self.dialog, bg='#1a1a1a')
         btn_frame.pack(pady=20)
+        
+        update_btn = tk.Button(btn_frame, text="🚀 Update Now", command=self.start_auto_update, 
+                                bg='#4cd964', fg='#000000', font=("Arial", 10, "bold"), 
+                                relief=tk.RAISED, bd=2, padx=20, pady=8)
+        update_btn.pack(side=tk.LEFT, padx=5)
         
         download_btn = tk.Button(btn_frame, text="📥 Download", command=self.download, 
                                 bg='#007aff', fg='#ffffff', font=("Arial", 10, "bold"), 
@@ -625,6 +663,7 @@ class UpdateNotificationDialog:
         remind_btn.pack(side=tk.LEFT, padx=5)
         
         self.download_url = download_url
+        self.latest_version = latest_version
     
     def download(self):
         """Open download page in default browser"""
@@ -634,295 +673,97 @@ class UpdateNotificationDialog:
         except:
             messagebox.showerror("Error", "Could not open browser. Please visit:\n" + self.download_url)
 
-class UpdateEchoPopup:
-    def __init__(self, parent, app, config):
-        self.parent = parent
-        self.app = app
-        self.config = config
-        self.backup_location = None
-        
-        self.popup = tk.Toplevel(parent)
-        self.popup.title("⚠ Update EchoVR Game Files")
-        self.popup.geometry("850x500")
-        self.popup.configure(bg='#1a1a1a')
-        self.popup.resizable(False, False)
-        
-        self.popup.transient(parent)
-        self.popup.grab_set()
-        
-        self.popup.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - self.popup.winfo_reqwidth()) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - self.popup.winfo_reqheight()) // 2
-        self.popup.geometry(f"+{x}+{y}")
-        
-        self.setup_ui()
-        self.refresh_backup_status()
-    
-    def setup_ui(self):
-        title_frame = tk.Frame(self.popup, bg='#1a1a1a')
-        title_frame.pack(fill=tk.X, padx=20, pady=20)
-        
-        warning_icon = "⚠️"
-        title_label = tk.Label(title_frame, text=f"{warning_icon} WARNING: Update EchoVR", font=("Arial", 14, "bold"), fg="#ff6b6b", bg='#1a1a1a')
-        title_label.pack()
-        
-        warning_text = """This menu allows you to update your EchoVR installation.
-Always create a backup before proceeding."""
-        
-        warning_label = tk.Label(self.popup, text=warning_text, font=("Arial", 11), fg="#ffffff", bg='#1a1a1a', justify=tk.CENTER, wraplength=650)
-        warning_label.pack(padx=20, pady=10)
-        
-        data_folder = self.config.get('data_folder', 'Not selected')
-        data_frame = tk.Frame(self.popup, bg='#2a2a2a', relief=tk.RAISED, bd=1)
-        data_frame.pack(fill=tk.X, padx=20, pady=10)
-        
-        tk.Label(data_frame, text="Game Data Folder:", font=("Arial", 10, "bold"), fg="#4cd964", bg='#2a2a2a').pack(anchor="w", padx=10, pady=(10, 0))
-        
-        folder_label = tk.Label(data_frame, text=data_folder, font=("Arial", 9), fg="#cccccc", bg='#2a2a2a', wraplength=620, justify=tk.LEFT)
-        folder_label.pack(fill=tk.X, padx=10, pady=(0, 10))
-        
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        output_folder = self.config.get('repacked_folder', os.path.join(script_dir, "output-both"))
-        output_frame = tk.Frame(self.popup, bg='#2a2a2a', relief=tk.RAISED, bd=1)
-        output_frame.pack(fill=tk.X, padx=20, pady=10)
-        
-        tk.Label(output_frame, text="Modified Files Source:", font=("Arial", 10, "bold"), fg="#4cd964", bg='#2a2a2a').pack(anchor="w", padx=10, pady=(10, 0))
-        
-        output_label = tk.Label(output_frame, text=output_folder, font=("Arial", 9), fg="#cccccc", bg='#2a2a2a', wraplength=620, justify=tk.LEFT)
-        output_label.pack(fill=tk.X, padx=10, pady=(0, 10))
-        
-        backup_frame = tk.Frame(self.popup, bg='#1a1a1a')
-        backup_frame.pack(fill=tk.X, padx=20, pady=10)
-        
-        btn_frame = tk.Frame(backup_frame, bg='#1a1a1a')
-        btn_frame.pack(pady=10)
-        
-        self.create_backup_btn = tk.Button(btn_frame, text="📁 Create Backup", command=self.create_backup, bg='#4a4a4a', fg='#ffffff', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=10)
-        self.create_backup_btn.pack(side=tk.LEFT, padx=5)
-        
-        self.restore_backup_btn = tk.Button(btn_frame, text="🔄 Restore Backup", command=self.restore_backup, bg='#4a4a4a', fg='#ffffff', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=10, state=tk.DISABLED)
-        self.restore_backup_btn.pack(side=tk.LEFT, padx=5)
-
-        self.update_pkg_btn = tk.Button(btn_frame, text="📦 Update Packages", command=self.start_update_thread, bg='#007aff', fg='#ffffff', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=10)
-        self.update_pkg_btn.pack(side=tk.LEFT, padx=5)
-
-
-        
-        self.backup_status = tk.Label(backup_frame, text="Checking backup status...", font=("Arial", 9), fg="#ffcc00", bg='#1a1a1a')
-        self.backup_status.pack()
-        
-        close_frame = tk.Frame(self.popup, bg='#1a1a1a')
-        close_frame.pack(fill=tk.X, padx=20, pady=20)
-        
-        self.close_btn = tk.Button(close_frame, text="Close", command=self.popup.destroy, bg='#4a4a4a', fg='#ffffff', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=30, pady=10)
-        self.close_btn.pack()
-    
-    def log_info(self, message):
-        if hasattr(self.app, 'log_info'):
-            self.app.log_info(message)
-    
-    def check_backup_exists(self):
-        backup_folder = self.config.get('backup_folder')
-        if backup_folder:
-            backup_folder = os.path.normpath(backup_folder)
-            if os.path.exists(backup_folder):
-                self.backup_location = backup_folder
-                return True
-        return False
-    
-    def refresh_backup_status(self):
-        if self.check_backup_exists():
-            self.backup_status.config(text=f"✓ Backup found: {os.path.basename(self.backup_location)}", fg="#4cd964")
-            self.restore_backup_btn.config(state=tk.NORMAL)
-        else:
-            self.backup_status.config(text="No backup found - create one before updating", fg="#ffcc00")
-            self.restore_backup_btn.config(state=tk.DISABLED)
-    
-    def create_backup(self):
-        if not self.config.get('data_folder'):
-            messagebox.showerror("Error", "Please select game data folder first")
+    def start_auto_update(self):
+        """Start the automated update process"""
+        if not messagebox.askyesno("Confirm Update", "The application will close and update to the latest version.\n\nContinue?"):
             return
-        
-        backup_path = filedialog.askdirectory(title="Select Backup Location", initialdir=os.path.dirname(self.config['data_folder']))
-        
-        if not backup_path:
-            return
-        
+            
+        self.dialog.withdraw()
+        progress = ProgressDialog(self.parent, "Updating Application", "Downloading latest version...", show_bar=True)
+        threading.Thread(target=self.run_auto_update, args=(progress,), daemon=True).start()
+
+    def run_auto_update(self, progress):
         try:
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            backup_folder = os.path.join(backup_path, f"EchoVR_Backup_{timestamp}")
+            # Get the direct download URL for the zip file from the releases page
+            # Usually it's in the form: https://github.com/user/repo/releases/download/v1.0.0/EchoVR-Texture-Editor.zip
+            # We'll try to guess it or just use the browser if it fails
+            zip_url = f"https://github.com/{GITHUB_REPO}/releases/download/v{self.latest_version}/EchoVR-Texture-Editor.zip"
             
-            self.backup_status.config(text="Creating backup...", fg="#ffcc00")
-            self.popup.update_idletasks()
+            temp_zip = os.path.join(tempfile.gettempdir(), f"update_v{self.latest_version}.zip")
             
-            # Run in thread to prevent freeze
-            def backup_task():
-                try:
-                    shutil.copytree(self.config['data_folder'], backup_folder)
-                    self.popup.after(0, lambda: self.on_backup_complete(True, backup_folder))
-                except Exception as e:
-                    self.popup.after(0, lambda: self.on_backup_complete(False, str(e)))
+            def report_progress(block_num, block_size, total_size):
+                current = block_num * block_size
+                if not progress.update(current, total_size):
+                    raise Exception("Update cancelled by user")
 
-            threading.Thread(target=backup_task, daemon=True).start()
+            urllib.request.urlretrieve(zip_url, temp_zip, reporthook=report_progress)
+            
+            # Create the update batch script
+            app_dir = get_base_dir()
+            app_exe = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
+            app_name = os.path.basename(app_exe)
+            
+            update_script = os.path.join(tempfile.gettempdir(), "update_app.bat")
+            temp_extract = os.path.join(tempfile.gettempdir(), "app_update_extract")
+            
+            # Clean extract dir
+            if os.path.exists(temp_extract):
+                shutil.rmtree(temp_extract)
+            os.makedirs(temp_extract)
+            
+            # Extract the zip
+            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
+                zip_ref.extractall(temp_extract)
+            
+            # Find the root of the extracted files (sometimes they are in a subfolder)
+            source_dir = temp_extract
+            for root, dirs, files in os.walk(temp_extract):
+                if "EVR_Texture_Editor.py" in files or "EVR_Texture_Editor.exe" in files:
+                    source_dir = root
+                    break
+
+            batch_content = f"""@echo off
+echo ========================================
+echo         TEXTURE EDITOR UPDATE
+echo ========================================
+echo.
+echo Closing application...
+taskkill /f /im "{app_name}" >nul 2>&1
+timeout /t 2 /nobreak >nul
+
+echo Updating files from: {source_dir}
+echo Target folder: {app_dir}
+echo.
+
+xcopy /s /e /y /h "{source_dir}\\*" "{app_dir}\\"
+
+echo.
+echo Cleaning up...
+del "{temp_zip}"
+rd /s /q "{temp_extract}"
+
+echo Update complete! Restarting...
+cd /d "{app_dir}"
+start "" "{app_name}"
+(goto) 2>nul & del "%~f0"
+"""
+            with open(update_script, 'w', encoding='ascii') as f:
+                f.write(batch_content)
+            
+            self.parent.after(0, lambda: self.execute_update(update_script))
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to start backup:\n{str(e)}")
+            self.parent.after(0, lambda: messagebox.showerror("Update Error", f"Failed to update:\n{str(e)}\n\nPlease update manually from GitHub."))
+            self.parent.after(0, progress.close)
 
-    def on_backup_complete(self, success, result):
-        if success:
-            ConfigManager.save_config(backup_folder=result)
-            self.config['backup_folder'] = result
-            self.backup_location = result
-            self.refresh_backup_status()
-            self.log_info(f"✓ Backup created: {result}")
-            messagebox.showinfo("Success", f"Backup created successfully at:\n{result}")
-        else:
-            messagebox.showerror("Error", f"Failed to create backup:\n{result}")
-            self.backup_status.config(text="Backup failed", fg="#ff3b30")
-
-    def restore_backup(self):
-        if not self.backup_location or not os.path.exists(self.backup_location):
-            messagebox.showerror("Error", "Backup not found")
-            return
-        
-        confirm = messagebox.askyesno("Confirm Restore", f"Restore game files from backup?\n\nBackup: {self.backup_location}\n\nThis will OVERWRITE your current game files.")
-        
-        if not confirm:
-            return
-        
-        self.backup_status.config(text="Restoring backup... (Do not close)", fg="#ffcc00")
-        self.restore_backup_btn.config(state=tk.DISABLED)
-        self.popup.update_idletasks()
-
-        def restore_task():
-            try:
-                if os.path.exists(self.config['data_folder']):
-                    shutil.rmtree(self.config['data_folder'])
-                shutil.copytree(self.backup_location, self.config['data_folder'])
-                self.popup.after(0, lambda: self.on_restore_complete(True, self.backup_location))
-            except Exception as e:
-                self.popup.after(0, lambda: self.on_restore_complete(False, str(e)))
-
-        threading.Thread(target=restore_task, daemon=True).start()
-
-    def on_restore_complete(self, success, result):
-        if success:
-            self.log_info(f"✓ Game files restored from backup: {result}")
-            messagebox.showinfo("Success", "Game files restored from backup!")
-            self.popup.destroy()
-        else:
-            messagebox.showerror("Error", f"Failed to restore backup:\n{result}")
-            self.backup_status.config(text="Restore failed", fg="#ff3b30")
-            self.restore_backup_btn.config(state=tk.NORMAL)
-
-    def start_update_thread(self):
-        # Validation checks
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        output_folder = self.config.get('repacked_folder')
-        if not output_folder:
-            output_folder = os.path.join(script_dir, "output-both")
-        
-        data_folder = self.config.get('data_folder')
-        
-        if not os.path.exists(output_folder):
-            messagebox.showerror("Error", f"Output folder not found:\n{output_folder}\n\nPlease repack your files first.")
-            return
-            
-        if not data_folder or not os.path.exists(data_folder):
-            messagebox.showerror("Error", "Game data folder not found.\nPlease select your EchoVR data folder first.")
-            return
-        
-        packages_path = os.path.join(output_folder, "packages")
-        manifests_path = os.path.join(output_folder, "manifests")
-        
-        if not os.path.exists(packages_path) or not os.path.exists(manifests_path):
-            messagebox.showerror("Error", f"Required folders not found in:\n{output_folder}\n\nPlease repack your files first.")
-            return
-        
-        if not self.backup_location:
-            warning_result = messagebox.askyesno("⚠ WARNING - No Backup Found", f"No backup found! This operation will OVERWRITE your game files.\n\nContinue WITHOUT a backup?")
-            if not warning_result:
-                return
-        
-        confirm = messagebox.askyesno("Update Game Files", f"This will UPDATE your EchoVR installation.\n\nSource: {output_folder}\nTarget: {data_folder}\n\nOperation:\n1. Move files from output-both to game folder\n2. Wipe output-both folder\n\nContinue?")
-        
-        if not confirm:
-            return
-
-        # Disable buttons
-        self.update_pkg_btn.config(state=tk.DISABLED, text="Updating...")
-        self.close_btn.config(state=tk.DISABLED)
-        
-        # Show progress dialog
-        progress = ProgressDialog(self.popup, "Updating Game Files", "Moving files to game folder...")
-        
-        # Start Thread
-        threading.Thread(target=self.update_packages_thread, args=(output_folder, data_folder, progress), daemon=True).start()
-
-    def update_packages_thread(self, output_folder, data_folder, progress):
+    def execute_update(self, script_path):
         try:
-            files_moved = 0
-            total_files = 0
-            
-            # Count total files first
-            for folder in ['packages', 'manifests']:
-                src_path = os.path.join(output_folder, folder)
-                if os.path.exists(src_path):
-                    total_files += len([f for f in os.listdir(src_path) if os.path.isfile(os.path.join(src_path, f))])
-            
-            if total_files == 0:
-                total_files = 1  # Avoid division by zero
-            
-            # Move files
-            for folder in ['packages', 'manifests']:
-                src_path = os.path.join(output_folder, folder)
-                dst_path = os.path.join(data_folder, folder)
-                
-                if os.path.exists(src_path):
-                    os.makedirs(dst_path, exist_ok=True)
-                    
-                    for filename in os.listdir(src_path):
-                        if not progress.update(files_moved, total_files):
-                            self.popup.after(0, lambda: self.on_update_complete(False, "Operation cancelled"))
-                            return
-                        
-                        src_file = os.path.join(src_path, filename)
-                        dst_file = os.path.join(dst_path, filename)
-                        
-                        if os.path.isfile(src_file):
-                            shutil.move(src_file, dst_file)
-                            files_moved += 1
-            
-            progress.update(total_files, total_files)
-            
-            try:
-                for folder in ['packages', 'manifests']:
-                    folder_path = os.path.join(output_folder, folder)
-                    if os.path.exists(folder_path):
-                        shutil.rmtree(folder_path)
-            except Exception as wipe_error:
-                self.popup.after(0, lambda: self.log_info(f"⚠ Could not completely wipe output-both: {wipe_error}"))
-            
-            self.popup.after(0, lambda: self.on_update_complete(True, files_moved, progress))
-
+            subprocess.Popen([script_path], shell=True)
+            self.parent.destroy()
+            sys.exit(0)
         except Exception as e:
-            self.popup.after(0, lambda: self.on_update_complete(False, str(e), progress))
+            messagebox.showerror("Error", f"Failed to run update script: {e}")
 
-    def on_update_complete(self, success, result, progress=None):
-        if progress:
-            progress.close()
-        
-        self.update_pkg_btn.config(state=tk.NORMAL, text="📦 Update Packages")
-        self.close_btn.config(state=tk.NORMAL)
-        
-        if success:
-            self.log_info(f"✓ Moved {result} files to game folder")
-            self.log_info(f"✓ Wiped output-both folder")
-            messagebox.showinfo("Success", f"Successfully updated game files!\n\nFiles moved: {result}")
-            self.popup.destroy()
-        else:
-            messagebox.showerror("Error", f"Failed to update packages:\n{result}")
-            self.backup_status.config(text="Update failed", fg="#ff3b30")
 
 
 class ModificationsViewerPopup:
@@ -1863,6 +1704,8 @@ class TextureLoader:
     def load_texture(texture_path, is_quest_texture=False):
         try:
             cache_path = TextureLoader.get_cache_path(texture_path)
+            
+            # 1. Check primary cache (Settings/texture_cache)
             if os.path.exists(cache_path):
                 try:
                     img = Image.open(cache_path).convert("RGBA")
@@ -1871,11 +1714,57 @@ class TextureLoader:
                     try: os.remove(cache_path)
                     except: pass
             
+            # 2. Check local/root texture_cache/ (Prioritize this for Quest if manual cache exists)
+            root_cache = os.path.join(get_base_dir(), "texture_cache")
+            png_name = os.path.splitext(os.path.basename(texture_path))[0] + ".png"
+            local_png = os.path.join(root_cache, png_name)
+            if os.path.exists(local_png):
+                try:
+                    img = Image.open(local_png).convert("RGBA")
+                    # Optionally copy to Settings cache for consistency
+                    if not os.path.exists(cache_path):
+                        try: shutil.copy2(local_png, cache_path)
+                        except: pass
+                    return img
+                except: pass
+            
+            # If cache fails, continue with extraction/decoding
+            # Check for metadata header
+            
+            # Check for metadata header
+            stripped_path = None
+            try:
+                with open(texture_path, 'rb') as f:
+                    header = f.read(4)
+                    if header != b'DDS ' and header != b'\x13\xAB\xA1\x5C':
+                        # Might have a metadata header
+                        f.seek(256)
+                        sub_header = f.read(4)
+                        if sub_header == b'DDS ' or sub_header == b'\x13\xAB\xA1\x5C':
+                            # Strip 256 bytes
+                            f.seek(256)
+                            data = f.read()
+                            suffix = ".astc" if is_quest_texture else ".dds"
+                            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+                                tf.write(data)
+                                stripped_path = tf.name
+            except Exception as e:
+                print(f"DEBUG: Error checking metadata header for {os.path.basename(texture_path)}: {e}")
+
+            load_path = stripped_path if stripped_path else texture_path
+
             if is_quest_texture:
-                return TextureLoader.load_quest_texture(texture_path, cache_path)
+                result = TextureLoader.load_quest_texture(load_path, cache_path)
             else:
-                return TextureLoader.load_dds_texture(texture_path, cache_path)
-        except Exception:
+                result = TextureLoader.load_dds_texture(load_path, cache_path)
+
+            if stripped_path and os.path.exists(stripped_path):
+                try: os.remove(stripped_path)
+                except: pass
+            
+            return result
+        except Exception as e:
+            print(f"DEBUG: load_texture exception for {os.path.basename(texture_path)}: {e}")
             return DDSHandler.create_format_preview(256, 256, "Error Loading", texture_path)
 
     @staticmethod
@@ -2019,34 +1908,67 @@ class TextureReplacer:
             return None, 0
 
     @staticmethod
-    def hex_edit_file_size(file_path, new_size):
+    def hex_edit_header_info(file_path, width, height, data_size):
+        """Update Width (0xE8), Height (0xEC), and Data Size (0xF4) in the 256-byte header."""
         try:
             with open(file_path, 'r+b') as f:
                 data = bytearray(f.read())
-                if len(data) >= 248:
-                    file_size_bytes = struct.pack('<I', new_size)
-                    data[244:248] = file_size_bytes
+                if len(data) >= 256:
+                    # Width at 0xE8 (232 decimal)
+                    data[232:236] = struct.pack('<I', width)
+                    # Height at 0xEC (236 decimal)
+                    data[236:240] = struct.pack('<I', height)
+                    # Data size at 0xF4 (244 decimal)
+                    data[244:248] = struct.pack('<I', data_size)
+                    
                     f.seek(0)
                     f.write(data)
                     f.truncate()
+                    print(f"Updated header info in {os.path.basename(file_path)}: {width}x{height}, size={data_size}")
                     return True
                 else:
-                    return False
-        except Exception:
-            return False
+                    print(f"Skipping header update: {os.path.basename(file_path)} is too small ({len(data)} bytes)")
+                    return True
+        except Exception as e:
+            print(f"Hex edit error for {os.path.basename(file_path)}: {e}")
+            return True
     
     @staticmethod
-    def replace_pcvr_texture(output_folder, pcvr_input_folder, original_texture_path, replacement_texture_path, replacement_size=None):
+    def replace_pcvr_texture(output_folder, pcvr_input_folder, original_texture_path, replacement_texture_path, replacement_size=None, source_folder_id=None):
         try:
             orig_info = DDSHandler.get_dds_info(original_texture_path)
+            # If not a standard DDS, might have a header
+            has_header = False
+            header_data = None
+            if not orig_info:
+                try:
+                    with open(original_texture_path, 'rb') as f:
+                        header_candidate = f.read(256)
+                        f.seek(256)
+                        sub_header = f.read(4)
+                        # NEW: If in metadata folder, force has_header regardless of magic check
+                        if sub_header == b'DDS ' or source_folder_id == PCVR_METADATA_ID:
+                            has_header = True
+                            header_data = bytearray(header_candidate)
+                            # Temporarily strip header to get info
+                            with tempfile.NamedTemporaryFile(suffix=".dds", delete=False) as tf:
+                                f.seek(256)
+                                tf.write(f.read())
+                                temp_dds = tf.name
+                            orig_info = DDSHandler.get_dds_info(temp_dds)
+                            os.remove(temp_dds)
+                except: pass
+
             if not orig_info or 'width' not in orig_info:
                 return False, "Could not read original texture dimensions"
+            
             target_w = orig_info['width']
             target_h = orig_info['height']
 
             is_dds = replacement_texture_path.lower().endswith(".dds") and os.path.isfile(replacement_texture_path)
             repl_info = DDSHandler.get_dds_info(replacement_texture_path) if is_dds else None
             needs_convert = not is_dds or (repl_info and (repl_info.get('width') != target_w or repl_info.get('height') != target_h))
+            
             if needs_convert or not is_dds:
                 dds_path, replacement_size = TextureReplacer.convert_to_dds(replacement_texture_path, target_w, target_h)
                 if dds_path is None:
@@ -2056,42 +1978,91 @@ class TextureReplacer:
                 if replacement_size is None:
                     replacement_size = os.path.getsize(replacement_texture_path)
 
-            input_textures_folder = os.path.join(pcvr_input_folder, PCVR_TEXTURE_ID)
-            input_corresponding_folder = os.path.join(pcvr_input_folder, PCVR_METADATA_ID)
+            # Determine folders based on source_folder_id
+            if source_folder_id == PCVR_METADATA_ID:
+                texture_folder_id = PCVR_METADATA_ID
+                meta_folder_id = PCVR_TEXTURE_ID
+            else:
+                texture_folder_id = PCVR_TEXTURE_ID
+                meta_folder_id = PCVR_METADATA_ID
+
+            input_textures_folder = os.path.join(pcvr_input_folder, texture_folder_id)
+            input_corresponding_folder = os.path.join(pcvr_input_folder, meta_folder_id)
             os.makedirs(input_textures_folder, exist_ok=True)
             os.makedirs(input_corresponding_folder, exist_ok=True)
 
             texture_name = os.path.basename(original_texture_path)
-            output_corresponding_file = os.path.join(output_folder, PCVR_METADATA_ID, texture_name)
+            output_corresponding_file = os.path.join(output_folder, meta_folder_id, texture_name)
             input_texture_path = os.path.join(input_textures_folder, texture_name)
             input_corresponding_path = os.path.join(input_corresponding_folder, texture_name)
 
-            shutil.copy2(dds_path, input_texture_path)
+            # Prepare final data (Fixed: Full 256-byte header)
+            with open(dds_path, 'rb') as f:
+                dds_data = f.read()
+
+            if has_header and header_data:
+                # Use FULL 256 bytes
+                final_data = header_data[:256] + dds_data
+            else:
+                final_data = dds_data
+
+            with open(input_texture_path, 'wb') as f:
+                f.write(final_data)
+
+            # Update texture file's internal header fields if it has one
+            if has_header:
+                TextureReplacer.hex_edit_header_info(input_texture_path, target_w, target_h, len(dds_data))
+
             if dds_path != replacement_texture_path and os.path.isfile(dds_path):
-                try:
-                    os.remove(dds_path)
-                except Exception:
-                    pass
+                try: os.remove(dds_path)
+                except: pass
 
             if os.path.exists(output_corresponding_file):
+                print(f"DEBUG: Found corresponding file at {output_corresponding_file}, copying to {input_corresponding_path}")
                 shutil.copy2(output_corresponding_file, input_corresponding_path)
-                if TextureReplacer.hex_edit_file_size(input_corresponding_path, replacement_size):
-                    return True, f"PCVR texture replaced. Size updated to {replacement_size} bytes."
-                return False, "Failed to update file size"
+                if TextureReplacer.hex_edit_header_info(input_corresponding_path, target_w, target_h, len(dds_data)):
+                    print(f"DEBUG: PCVR replacement success (meta updated)")
+                    return True, f"PCVR texture replaced. Header fields updated to {target_w}x{target_h}."
+                return False, "Failed to update metadata header"
+            print(f"DEBUG: Corresponding file not found at {output_corresponding_file}")
             return False, "Corresponding file not found"
         except Exception as e:
             return False, f"PCVR replacement error: {str(e)}"
 
     @staticmethod
-    def replace_quest_texture(output_folder, quest_input_folder, original_texture_path, replacement_texture_path, texture_cache):
+    def replace_quest_texture(output_folder, quest_input_folder, original_texture_path, replacement_texture_path, texture_cache, source_folder_id=None):
         try:
-            input_textures_folder = os.path.join(quest_input_folder, QUEST_TEXTURE_ID)
-            input_corresponding_folder = os.path.join(quest_input_folder, QUEST_METADATA_ID)
+            # Check for metadata header in original
+            has_header = False
+            header_data = None
+            try:
+                with open(original_texture_path, 'rb') as f:
+                    header_candidate = f.read(256)
+                    f.seek(256)
+                    sub_header = f.read(4)
+                    # NEW: If in metadata folder, force has_header regardless of magic check
+                    if sub_header == b'\x13\xAB\xA1\x5C' or source_folder_id == QUEST_METADATA_ID:
+                        has_header = True
+                        header_data = bytearray(header_candidate)
+            except: pass
+
+            # Determine folders based on source_folder_id
+            if source_folder_id == QUEST_METADATA_ID:
+                texture_folder_id = QUEST_METADATA_ID
+                meta_folder_id = QUEST_TEXTURE_ID
+            else:
+                texture_folder_id = QUEST_TEXTURE_ID
+                meta_folder_id = QUEST_METADATA_ID
+
+            input_textures_folder = os.path.join(quest_input_folder, texture_folder_id)
+            input_corresponding_folder = os.path.join(quest_input_folder, meta_folder_id)
             os.makedirs(input_textures_folder, exist_ok=True)
             os.makedirs(input_corresponding_folder, exist_ok=True)
             
             texture_name = os.path.basename(original_texture_path)
             original_size = os.path.getsize(original_texture_path)
+            if has_header:
+                original_size -= 256 # Data size only
             
             astcenc_path = TextureLoader.get_astcenc_path()
             if not astcenc_path: return False, "astcenc not found"
@@ -2104,31 +2075,59 @@ class TextureReplacer:
             texture_name_no_ext = os.path.splitext(texture_name)[0]
             success = False
             
+            # Dimensions for header update if mapping exists
+            target_w = 0
+            target_h = 0
             if texture_name_no_ext in DECODE_CACHE:
+                config = DECODE_CACHE[texture_name_no_ext]
+                target_w = config['width']
+                target_h = config['height']
                 success = ASTCTools.encode_with_cache(astcenc_path, Path(replacement_texture_path), Path(temp_output), texture_name_no_ext, "medium")
             elif mapping:
                 if texture_name_no_ext in mapping:
+                     target_w = mapping[texture_name_no_ext]['width']
+                     target_h = mapping[texture_name_no_ext]['height']
                      success = ASTCTools.encode_texture(astcenc_path, Path(replacement_texture_path), Path(temp_output), 
-                                                     mapping[texture_name_no_ext]['width'], mapping[texture_name_no_ext]['height'], 
-                                                     8, 8, "medium", original_size)
+                                                      target_w, target_h, 
+                                                      8, 8, "medium", original_size)
             
             if not success: return False, "Failed to encode/find texture info"
             
             input_texture_path = os.path.join(input_textures_folder, texture_name)
-            shutil.copy2(temp_output, input_texture_path)
-            final_size = os.path.getsize(temp_output)
             
-            # Update corresponding metadata file size
-            output_corresponding_file = os.path.join(output_folder, QUEST_METADATA_ID, texture_name)
+            # Load encoded data (Fixed: Full 256-byte header)
+            with open(temp_output, 'rb') as f:
+                encoded_data = f.read()
+            
+            if has_header and header_data:
+                # Use FULL 256 bytes
+                final_data = header_data[:256] + encoded_data
+            else:
+                final_data = encoded_data
+            
+            with open(input_texture_path, 'wb') as f:
+                f.write(final_data)
+
+            # Update texture file's internal header fields if it has one
+            if has_header:
+                TextureReplacer.hex_edit_header_info(input_texture_path, target_w, target_h, len(encoded_data))
+            
+            # Update corresponding metadata file
+            output_corresponding_file = os.path.join(output_folder, meta_folder_id, texture_name)
             if os.path.exists(output_corresponding_file):
                 input_corresponding_path = os.path.join(input_corresponding_folder, texture_name)
+                print(f"DEBUG: Found Quest corresponding file at {output_corresponding_file}, copying to {input_corresponding_path}")
                 shutil.copy2(output_corresponding_file, input_corresponding_path)
-                TextureReplacer.hex_edit_file_size(input_corresponding_path, final_size)
-        
+                if TextureReplacer.hex_edit_header_info(input_corresponding_path, target_w, target_h, len(encoded_data)):
+                    print(f"DEBUG: Quest replacement success (meta updated)")
+                else:
+                    print(f"DEBUG: Failed to update Quest metadata header")
+            else:
+                print(f"DEBUG: Quest corresponding file NOT found at {output_corresponding_file}")
             
             try: os.remove(temp_output)
             except: pass
-            return True, f"Quest texture replaced. Size updated to {final_size} bytes."
+            return True, f"Quest texture replaced. Header fields updated to {target_w}x{target_h}."
         except Exception as e:
             return False, f"Quest replacement error: {str(e)}"
 
@@ -2244,20 +2243,48 @@ class TextureGridPopup:
         end_idx = min(start_idx + self.TEXTURES_PER_PAGE, len(self.image_files))
         
         # Show loading indicator
-        loading_lbl = tk.Label(self.scroll_frame, text="Loading...", fg="white", bg="#1a1a1a")
+        loading_lbl = tk.Label(self.scroll_frame, text="Loading textures...", fg="#4cd964", bg="#1a1a1a", font=("Arial", 10, "bold"))
         loading_lbl.grid(row=0, column=0, columnspan=self.GRID_COLS, pady=20)
         
         threading.Thread(target=self._load_page_worker, args=(start_idx, end_idx, current_gen, loading_lbl), daemon=True).start()
 
     def _load_page_worker(self, start_idx, end_idx, generation, loading_lbl):
-        for idx in range(start_idx, end_idx):
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def get_clean_basename(p):
+            if not p: return ""
+            return os.path.basename(os.path.normpath(p))
+
+        def load_single_thumb(idx):
             if not self.window.winfo_exists() or self.loading_generation != generation:
                 return
             
-            filename = self.image_files[idx]
-            file_path = os.path.join(self.folder_path, filename)
-            
+            item = self.image_files[idx]
+            actual_folder = None
             try:
+                if isinstance(item, dict):
+                    filename = item["n"]
+                    folder_id = item["f"]
+                    
+                    # Determine absolute folder path based on folder_id
+                    primary_name = get_clean_basename(self.app.textures_folder)
+                    meta_name = get_clean_basename(self.app.corresponding_folder)
+                    
+                    if folder_id == primary_name:
+                        actual_folder = self.app.textures_folder
+                    elif folder_id == meta_name and self.app.corresponding_folder:
+                        actual_folder = self.app.corresponding_folder
+                    else:
+                        actual_folder = self.folder_path
+                else:
+                    filename = item
+                    actual_folder = self.folder_path
+                    
+                if not actual_folder:
+                    print(f"DEBUG: No actual folder for {filename}")
+                    return
+
+                file_path = os.path.join(actual_folder, filename)
                 img = TextureLoader.load_texture(file_path, self.is_quest)
                 if img:
                     img.thumbnail(self.THUMB_SIZE)
@@ -2267,24 +2294,31 @@ class TextureGridPopup:
                     row = rel_idx // self.GRID_COLS
                     col = rel_idx % self.GRID_COLS
                     
-                    self.window.after(0, lambda i=img, f=filename, r=row, c=col: self.add_thumbnail(i, f, r, c))
-            except Exception:
-                pass
+                    self.window.after(0, lambda i=img, f=filename, r=row, c=col, p=actual_folder: self.add_thumbnail(i, f, r, c, p))
+                else:
+                    # Print why it failed to load
+                    pass
+            except Exception as e:
+                print(f"DEBUG: Grid thumb load failed for {item}: {e}")
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            executor.map(load_single_thumb, range(start_idx, end_idx))
         
         self.window.after(0, lambda: loading_lbl.destroy())
 
-    def add_thumbnail(self, img, filename, row, col):
+    def add_thumbnail(self, img, filename, row, col, folder_path):
         """Add a thumbnail to the grid"""
         if not self.window.winfo_exists():
             return
         
+        print(f"DEBUG: Adding thumbnail for {filename} (row {row}, col {col}) from {folder_path}")
         try:
             # Store texture resolution info
             self.texture_info[filename] = {
                 'width': img.width,
                 'height': img.height,
                 'pixels': img.width * img.height,
-                'size': os.path.getsize(os.path.join(self.folder_path, filename))
+                'size': os.path.getsize(os.path.join(folder_path, filename))
             }
             
             photo = ImageTk.PhotoImage(img)
@@ -2309,13 +2343,16 @@ class TextureGridPopup:
         """Handle sort mode change"""
         sort_selection = self.sort_var.get()
         
+        def get_name(item):
+            return item["n"] if isinstance(item, dict) else item
+
         # Sort image_files based on selected mode
         if sort_selection == "Name":
-            self.image_files.sort()
+            self.image_files.sort(key=get_name)
         elif sort_selection == "Pixels (Large to Small)":
-            self.image_files.sort(key=lambda f: self.texture_info.get(f, {}).get('pixels', 0), reverse=True)
+            self.image_files.sort(key=lambda f: self.texture_info.get(get_name(f), {}).get('pixels', 0), reverse=True)
         elif sort_selection == "Pixels (Small to Large)":
-            self.image_files.sort(key=lambda f: self.texture_info.get(f, {}).get('pixels', 0), reverse=False)
+            self.image_files.sort(key=lambda f: self.texture_info.get(get_name(f), {}).get('pixels', 0), reverse=False)
         
         # Reload page 0
         self.load_page(0)
@@ -2358,6 +2395,7 @@ class EchoVRTextureViewer:
         self.all_textures = []
         self.filtered_textures = []
         self.is_downloading = False
+        self.load_all_var = tk.BooleanVar(value=self.config.get('load_all', False))
         
         self.ensure_settings_folders()
         self.name_manager = NameManager(NAMES_FILE)
@@ -2458,8 +2496,6 @@ class EchoVRTextureViewer:
         title_label = tk.Label(header_frame, text="ECHO VR TEXTURE EDITOR", font=("Arial", 16, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'])
         title_label.pack(side=tk.LEFT, expand=True)
 
-        self.update_echo_btn = tk.Button(header_frame, text="⚠ Update EchoVR", command=lambda: UpdateEchoPopup(self.root, self, self.config), bg=self.colors['accent_red'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=8)
-        self.update_echo_btn.pack(side=tk.RIGHT, padx=(10, 0))
 
         self.share_mods_btn = tk.Button(header_frame, text="📤 Share Mods", command=self.share_modifications, bg='#4cd964', fg='#000000', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=8)
         self.share_mods_btn.pack(side=tk.RIGHT, padx=(10, 0))
@@ -2499,7 +2535,7 @@ class EchoVRTextureViewer:
         
         self.repack_btn = tk.Button(button_frame, text="Repack Modified", command=self.repack_package, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=20, pady=8, state=tk.DISABLED)
         self.repack_btn.pack(side=tk.LEFT, padx=5)
-        ToolTip(self.repack_btn, "Build a new package containing your modified textures.")
+        ToolTip(self.repack_btn, "Open repack options (Quick Repack or Revert to Backup).")
 
         self.evr_status_label = tk.Label(evr_frame, text="Ready", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
         self.evr_status_label.grid(row=3, column=0, columnspan=3, pady=(0, 10))
@@ -2518,6 +2554,14 @@ class EchoVRTextureViewer:
         
         search_frame = tk.Frame(left_frame, bg=self.colors['bg_dark'])
         search_frame.grid(row=0, column=0, sticky='ew', padx=5, pady=5)
+        
+        # Load all textures checkbox
+        self.load_all_cb = tk.Checkbutton(search_frame, text="Load all textures?", variable=self.load_all_var,
+                                          command=lambda: [self.load_textures(), ConfigManager.save_config(load_all=self.load_all_var.get())], 
+                                          bg=self.colors['bg_dark'], fg=self.colors['text_light'],
+                                          selectcolor=self.colors['bg_dark'], activebackground=self.colors['bg_dark'],
+                                          activeforeground=self.colors['accent_blue'], font=("Arial", 9))
+        self.load_all_cb.pack(side=tk.TOP, anchor=tk.W, pady=(0, 5))
         
         tk.Label(search_frame, text="Search:", font=("Arial", 9), fg=self.colors['text_light'], bg=self.colors['bg_dark']).pack(side=tk.LEFT, padx=(0, 5))
         
@@ -2595,9 +2639,6 @@ class EchoVRTextureViewer:
         self.replace_btn.pack(side=tk.LEFT, padx=5)
         ToolTip(self.replace_btn, "Apply the replacement image to the selected texture.")
         
-        self.download_btn = tk.Button(action_frame, text="Download All Textures", command=self.download_textures, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5)
-        self.download_btn.pack(side=tk.LEFT, padx=5)
-        ToolTip(self.download_btn, "Download a pre-generated cache of all textures (approx 400MB). Recommended for first time users.")
         
         self.load_all_btn = tk.Button(action_frame, text="Load/Cache All", command=self.load_all_textures, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5)
         self.load_all_btn.pack(side=tk.LEFT, padx=5)
@@ -2755,6 +2796,72 @@ class EchoVRTextureViewer:
         """Open the modifications viewer popup."""
         ModificationsViewerPopup(self.root, self)
     
+    def revert_package(self):
+        if not self.data_folder or not self.package_name:
+            return
+            
+        packages_dir = os.path.join(self.data_folder, "packages")
+        manifests_dir = os.path.join(self.data_folder, "manifests")
+        
+        # User's exact requested steps:
+        # 1. Delete the manifest file: 48037dc70b0ecab2 (in manifests)
+        # 2. Rename 48037dc70b0ecab2.bak -> 48037dc70b0ecab2 (in manifests)
+        # 3. Delete 48037dc70b0ecab2_3 (in packages)
+        
+        manifest_backup = os.path.join(manifests_dir, f"{self.package_name}.bak")
+        manifest_target = os.path.join(manifests_dir, self.package_name)
+        modded_pkg_3 = os.path.join(packages_dir, f"{self.package_name}_3")
+        
+        # Also check for package backup as fallback
+        package_backup = os.path.join(packages_dir, f"{self.package_name}.bak")
+        
+        has_manifest_backup = os.path.exists(manifest_backup)
+        has_package_backup = os.path.exists(package_backup)
+        
+        if not has_manifest_backup and not has_package_backup:
+            messagebox.showerror("Error", f"No backup found.\nChecked:\n- {manifest_backup}\n- {package_backup}")
+            return
+            
+        confirm = messagebox.askyesno("Confirm Revert", "This will restore the original game files from backup and REMOVE all mods.\n\nContinue?")
+        if not confirm: return
+        
+        try:
+            if has_manifest_backup:
+                # 1. Delete current manifest
+                if os.path.exists(manifest_target):
+                    os.remove(manifest_target)
+                    self.log_info(f"✓ Removed current manifest: {self.package_name}")
+                
+                # 2. Rename .bak -> original manifest
+                os.rename(manifest_backup, manifest_target)
+                self.log_info(f"✓ Restored original manifest from backup")
+            
+            # 3. Delete _3 package (the modded one)
+            if os.path.exists(modded_pkg_3):
+                os.remove(modded_pkg_3)
+                self.log_info(f"✓ Deleted modded package: {self.package_name}_3")
+            
+            # Additional: Revert package backup if it exists
+            if has_package_backup:
+                package_target = os.path.join(packages_dir, self.package_name)
+                if os.path.exists(package_target): os.remove(package_target)
+                os.rename(package_backup, package_target)
+                self.log_info(f"✓ Restored original package from backup")
+
+            # Handle split packages if they exist (_0)
+            backup_file_0 = os.path.join(packages_dir, f"{self.package_name}_0.bak")
+            target_file_0 = os.path.join(packages_dir, f"{self.package_name}_0")
+            if os.path.exists(backup_file_0):
+                if os.path.exists(target_file_0): os.remove(target_file_0)
+                os.rename(backup_file_0, target_file_0)
+                self.log_info(f"✓ Restored original package part 0")
+                
+            self.log_info("✓ Successfully reverted to original game files.")
+            messagebox.showinfo("Success", "Mods removed. Original game files restored.")
+            self.update_evr_buttons_state()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to revert: {str(e)}")
+
     def extract_package(self):
         if not all([self.data_folder, self.package_name, self.extracted_folder]):
             messagebox.showerror("Error", "Please select data folder, package, and extraction folder first.")
@@ -2835,89 +2942,96 @@ class EchoVRTextureViewer:
             messagebox.showerror("Error", "Please select data folder, package, and extraction folder first.")
             return
 
-        input_folder = self.extracted_folder
-        if not input_folder or not os.path.exists(input_folder):
-            messagebox.showerror("Error", "Extracted folder not set or found. Please perform a full extraction first.")
-        if self.is_quest_textures and self.quest_input_folder:
-            input_folder = self.quest_input_folder
-            self.log_info("🎯 Using Quest input folder for repacking")
-        elif self.is_pcvr_textures and self.pcvr_input_folder:
-            input_folder = self.pcvr_input_folder
-            self.log_info("🎮 Using PCVR input folder for repacking")
+        # Backup detection logic - Check manifests first (user's preferred location)
+        manifests_dir = os.path.join(self.data_folder, "manifests")
+        packages_dir = os.path.join(self.data_folder, "packages")
+        
+        manifest_backup = os.path.join(manifests_dir, f"{self.package_name}.bak")
+        package_backup = os.path.join(packages_dir, f"{self.package_name}.bak")
+        
+        has_backup = os.path.exists(manifest_backup) or os.path.exists(package_backup)
+        
+        # Log paths for user to verify
+        if os.path.exists(manifest_backup):
+            self.log_info(f"✓ Manifest backup found: {os.path.basename(manifest_backup)}")
+        elif os.path.exists(package_backup):
+            self.log_info(f"✓ Package backup found: {os.path.basename(package_backup)}")
         else:
-            messagebox.showerror("Error", "Input folder not found. Please check input-pcvr/input-quest folders.")
-            return
-        
-        self.log_info(f"📦 Using '{os.path.basename(input_folder)}' as input for repacking.")
-        
-        # Popup for Repack Mode
+            self.log_info(f"⚠ No backup found in manifests or packages folder.")
+
         popup = tk.Toplevel(self.root)
-        popup.title("Select Repack Mode")
-        popup.geometry("500x330")
+        popup.title("Repack Options")
+        popup.geometry("400x220")
         popup.configure(bg=self.colors['bg_medium'])
         popup.resizable(False, False)
         popup.transient(self.root)
         popup.grab_set()
-        
+
         try:
-            x = self.root.winfo_x() + (self.root.winfo_width() - 500) // 2
-            y = self.root.winfo_y() + (self.root.winfo_height() - 330) // 2
+            x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - 220) // 2
             popup.geometry(f"+{x}+{y}")
         except: pass
 
-        tk.Label(popup, text="Choose Repack Method", font=("Arial", 12, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_medium']).pack(pady=(20, 10))
+        tk.Label(popup, text="Select Repack Action", font=("Arial", 12, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_medium']).pack(pady=(20, 10))
         
         btn_frame = tk.Frame(popup, bg=self.colors['bg_medium'])
-        btn_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
-        
-        def do_repack(quick):
+        btn_frame.pack(fill=tk.X, padx=20)
+
+        input_folder = self.extracted_folder
+        if self.is_quest_textures and self.quest_input_folder:
+            input_folder = self.quest_input_folder
+        elif self.is_pcvr_textures and self.pcvr_input_folder:
+            input_folder = self.pcvr_input_folder
+
+        def run_quick_repack():
             popup.destroy()
-            self._run_repack(input_folder, quick)
+            if not os.path.exists(input_folder):
+                messagebox.showerror("Error", "Input folder not found. Please check your setup.")
+                return
+            
+            confirm = messagebox.askyesno("Confirm Quick Repack", "⚠ WARNING: Quick Repack modifies your game files directly.\n\nEnsure you have a backup before proceeding.\n\nContinue?")
+            if not confirm: return
 
-        def do_revert():
+            progress = ProgressDialog(self.root, "Repacking Package", "Quick Repack in progress...\n\nThis may take a few minutes...", show_bar=False)
+            self.evr_status_label.config(text="Quick Repack...", fg=self.colors['accent_green'])
+            self.root.update_idletasks()
+            
+            def repacking_thread():
+                backup_source = os.path.join(self.data_folder, "packages", self.package_name)
+                backup_dest = os.path.join(self.data_folder, "packages", f"{self.package_name}.bak")
+                
+                # Create backup if it doesn't exist
+                if os.path.exists(backup_source) and not os.path.exists(backup_dest):
+                    try:
+                        shutil.copy2(backup_source, backup_dest)
+                        self.log_info(f"✓ Created backup of {self.package_name}")
+                        
+                        # Handle _0 part
+                        backup_source_0 = f"{backup_source}_0"
+                        backup_dest_0 = f"{backup_dest.replace('.bak', '')}_0.bak"
+                        if os.path.exists(backup_source_0):
+                            shutil.copy2(backup_source_0, backup_dest_0)
+                    except Exception as e:
+                        self.log_info(f"⚠ Failed to create backup: {e}")
+
+                success, message = self.evr_tools.repack_package(self.repacked_folder, self.package_name, self.data_folder, input_folder, quick_mode=True)
+                self.root.after(0, lambda: self.on_repacking_complete(success, message, self.repacked_folder, progress, True))
+            
+            threading.Thread(target=repacking_thread, daemon=True).start()
+
+        def run_revert():
             popup.destroy()
-            try:
-                manifest_dir = os.path.join(self.data_folder, "manifests")
-                packages_dir = os.path.join(self.data_folder, "packages")
-                
-                target_manifest = os.path.join(manifest_dir, "48037dc70b0ecab2")
-                backup_manifest = os.path.join(manifest_dir, "48037dc70b0ecab2.bak")
-                target_package = os.path.join(packages_dir, "48037dc70b0ecab2_3")
-                
-                if os.path.exists(target_manifest):
-                    os.remove(target_manifest)
-                
-                if os.path.exists(backup_manifest):
-                    os.rename(backup_manifest, target_manifest)
-                
-                if os.path.exists(target_package):
-                    os.remove(target_package)
-                    
-                messagebox.showinfo("Revert Complete", "Successfully reverted to backup!")
-            except Exception as e:
-                messagebox.showerror("Revert Error", f"Failed to revert backup:\n{str(e)}")
+            self.revert_package()
 
-        # Full Repack Button
-        full_btn = tk.Button(btn_frame, text="Full Repack (Standard)\nCreates new files in 'output-both' folder.\nSafe, leaves original files untouched.", 
-                            command=lambda: do_repack(False), bg=self.colors['bg_light'], fg=self.colors['text_light'], 
-                            font=("Arial", 10), relief=tk.RAISED, justify=tk.LEFT, padx=10, pady=5)
-        full_btn.pack(fill=tk.X, pady=5)
+        tk.Button(btn_frame, text="Quick Repack (Apply Mods)", command=run_quick_repack, bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED).pack(fill=tk.X, pady=5)
         
-        # Quick Repack Button
-        quick_btn = tk.Button(btn_frame, text="Quick Repack (Experimental)\nDirectly modifies game files in-place.\nFastest, but requires a backup!", 
-                             command=lambda: do_repack(True), bg=self.colors['accent_orange'], fg=self.colors['text_light'], 
-                             font=("Arial", 10, "bold"), relief=tk.RAISED, justify=tk.LEFT, padx=10, pady=5)
-        quick_btn.pack(fill=tk.X, pady=5)
-
-        # Revert to backup Button (Conditional)
-        backup_manifest_path = os.path.join(self.data_folder, "manifests", "48037dc70b0ecab2.bak")
-
+        revert_state = tk.NORMAL if has_backup else tk.DISABLED
+        revert_bg = self.colors['accent_orange'] if has_backup else self.colors['bg_light']
+        tk.Button(btn_frame, text="Revert to Backup (Remove Mods)", command=run_revert, bg=revert_bg, fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, state=revert_state).pack(fill=tk.X, pady=5)
         
-        if os.path.exists(backup_manifest_path):
-            revert_btn = tk.Button(btn_frame, text="Revert to Backup\nRestores the original files.\nDeletes your modifications.", 
-                                 command=do_revert, bg=self.colors['accent_red'], fg=self.colors['text_light'], 
-                                 font=("Arial", 10, "bold"), relief=tk.RAISED, justify=tk.LEFT, padx=10, pady=5)
-            revert_btn.pack(fill=tk.X, pady=5)
+        if not has_backup:
+            tk.Label(popup, text="(Backup will be created on first repack)", font=("Arial", 8, "italic"), fg=self.colors['text_muted'], bg=self.colors['bg_medium']).pack(pady=0)
 
     def _run_repack(self, input_folder, quick_mode):
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -3111,21 +3225,40 @@ class EchoVRTextureViewer:
     def set_output_folder(self, path):
         self.output_folder = path
         folder_name = os.path.basename(path).lower()
+        
+        # Reset flags first
+        self.is_quest_textures = False
+        self.is_pcvr_textures = False
+        self.textures_folder = path
+        self.corresponding_folder = None
+        
         if "quest" in folder_name:
             self.is_quest_textures = True
-            self.is_pcvr_textures = False
             self.textures_folder = os.path.join(path, QUEST_TEXTURE_ID)
             self.corresponding_folder = os.path.join(path, QUEST_METADATA_ID)
             self.platform_label.config(text="Platform: Quest (ASTC)", fg=self.colors['success'])
             self.log_info("🎯 Switched to Quest mode")
         elif "pcvr" in folder_name:
-            self.is_quest_textures = False
             self.is_pcvr_textures = True
             self.textures_folder = os.path.join(path, PCVR_TEXTURE_ID)
             self.corresponding_folder = os.path.join(path, PCVR_METADATA_ID)
             self.platform_label.config(text="Platform: PCVR (DDS)", fg=self.colors['accent_blue'])
             self.push_quest_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
             self.log_info("🎮 Switched to PCVR mode")
+        elif folder_name == PCVR_TEXTURE_ID or folder_name == PCVR_METADATA_ID:
+            parent = os.path.dirname(path)
+            self.is_pcvr_textures = True
+            self.textures_folder = os.path.join(parent, PCVR_TEXTURE_ID)
+            self.corresponding_folder = os.path.join(parent, PCVR_METADATA_ID)
+            self.platform_label.config(text="Platform: PCVR (DDS)", fg=self.colors['accent_blue'])
+            self.log_info(f"🎮 Detected PCVR folder structure ({folder_name})")
+        elif folder_name == QUEST_TEXTURE_ID or folder_name == QUEST_METADATA_ID:
+            parent = os.path.dirname(path)
+            self.is_quest_textures = True
+            self.textures_folder = os.path.join(parent, QUEST_TEXTURE_ID)
+            self.corresponding_folder = os.path.join(parent, QUEST_METADATA_ID)
+            self.platform_label.config(text="Platform: Quest (ASTC)", fg=self.colors['success'])
+            self.log_info(f"🎯 Detected Quest folder structure ({folder_name})")
         else:
             quest_textures_folder = os.path.join(path, QUEST_TEXTURE_ID)
             pcvr_textures_folder = os.path.join(path, PCVR_TEXTURE_ID)
@@ -3141,19 +3274,16 @@ class EchoVRTextureViewer:
                 self.textures_folder = quest_textures_folder
                 self.corresponding_folder = os.path.join(path, QUEST_METADATA_ID)
                 self.is_quest_textures = True
-                self.is_pcvr_textures = False
                 self.platform_label.config(text="Platform: Quest (ASTC)", fg=self.colors['success'])
                 self.log_info("🎯 Auto-detected Quest textures")
             elif os.path.exists(pcvr_textures_folder):
                 self.textures_folder = pcvr_textures_folder
                 self.corresponding_folder = os.path.join(path, PCVR_METADATA_ID)
-                self.is_quest_textures = False
                 self.is_pcvr_textures = True
                 self.platform_label.config(text="Platform: PCVR (DDS)", fg=self.colors['accent_blue'])
                 self.push_quest_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
                 self.log_info("🎮 Auto-detected PCVR textures")
             else:
-                self.textures_folder = path
                 self.log_info("⚠ Could not determine platform structure, using root folder")
 
         if os.path.exists(self.textures_folder):
@@ -3173,13 +3303,14 @@ class EchoVRTextureViewer:
         if not search_text:
             self.filtered_textures = self.all_textures.copy()
         else:
-            for texture in self.all_textures:
-                display_name = self.name_manager.get_name(texture)
-                if search_text in texture.lower() or search_text in display_name.lower():
-                    self.filtered_textures.append(texture)
+            for texture_data in self.all_textures:
+                name = texture_data["n"]
+                display_name = self.name_manager.get_name(name)
+                if search_text in name.lower() or search_text in display_name.lower():
+                    self.filtered_textures.append(texture_data)
         
-        for texture in self.filtered_textures:
-            display_name = self.name_manager.get_name(texture)
+        for texture_data in self.filtered_textures:
+            display_name = self.name_manager.get_name(texture_data["n"])
             self.file_list.insert(tk.END, display_name)
     
     def clear_search(self):
@@ -3198,21 +3329,29 @@ class EchoVRTextureViewer:
             if not os.path.isfile(file_path): return False
             size = os.path.getsize(file_path)
             if size == 0: return False
-
+            
             if not self.is_pcvr_textures and not self.is_quest_textures:
                 return True
 
             with open(file_path, 'rb') as f:
                 header = f.read(16)
+                # Check for metadata header (256 bytes)
+                if size > 272:
+                    f.seek(256)
+                    header_offset = f.read(16)
+                else:
+                    header_offset = b""
 
             if self.is_pcvr_textures:
-                return header.startswith(b'DDS ')
+                return header.startswith(b'DDS ') or header_offset.startswith(b'DDS ')
             
             if self.is_quest_textures:
-                if header.startswith(b'\x13\xAB\xA1\x5C'): return True
-                if header.startswith(b'\xABKTX 11') or header.startswith(b'\xABKTX 20'): return True
-                if b'BcBP' in header: return True
-                if header.startswith(b'PVR'): return True
+                # Standard signatures at offset 0 or offset 256
+                for h in [header, header_offset]:
+                    if h.startswith(b'\x13\xAB\xA1\x5C'): return True
+                    if h.startswith(b'\xABKTX 11') or h.startswith(b'\xABKTX 20'): return True
+                    if b'BcBP' in h[:8]: return True
+                    if h.startswith(b'PVR'): return True
                 
                 if size % 16 == 0:
                     if header.strip().startswith(b'{') or header.strip().startswith(b'<'):
@@ -3229,19 +3368,49 @@ class EchoVRTextureViewer:
              self.root.after(0, lambda: self._on_textures_loaded([], 0))
              return
 
-        cached_files = TextureCacheManager.get_cached_files(self.textures_folder)
+        self.log_info(f"Scanning folder: {os.path.basename(self.textures_folder)}")
+        
+        load_all = self.load_all_var.get()
+        self.log_info(f"Load all textures: {load_all}")
+        
+        # Check cache (now supports load_all)
+        cached_files = TextureCacheManager.get_cached_files(self.textures_folder, load_all=load_all)
+        
         if cached_files is not None:
+             self.log_info(f"Using cached textures ({len(cached_files)})")
              self.root.after(0, lambda: self._on_textures_loaded(cached_files, len(cached_files)))
              return
 
+        # Scan primary folder
         valid_files = []
         try:
+            primary_folder_id = os.path.basename(self.textures_folder)
             with os.scandir(self.textures_folder) as it:
                 for e in it:
                     if e.is_file() and self._is_valid_texture_file(e.path):
-                        valid_files.append(e.name)
+                        valid_files.append({"n": e.name, "f": primary_folder_id})
             
-            TextureCacheManager.update_cache(self.textures_folder, valid_files)
+            # If load all is enabled, also scan the corresponding metadata folder
+            if load_all and self.corresponding_folder:
+                self.log_info(f"Checking metadata folder: {os.path.basename(self.corresponding_folder)}")
+                if os.path.exists(self.corresponding_folder):
+                    meta_folder_id = os.path.basename(self.corresponding_folder)
+                    if meta_folder_id != primary_folder_id:
+                        self.log_info(f"Scanning metadata folder: {meta_folder_id}")
+                        count_before = len(valid_files)
+                        with os.scandir(self.corresponding_folder) as it:
+                            for e in it:
+                                if e.is_file() and self._is_valid_texture_file(e.path):
+                                    # Avoid duplicates if same filename exists in both
+                                    if not any(f["n"] == e.name for f in valid_files):
+                                        valid_files.append({"n": e.name, "f": meta_folder_id})
+                        self.log_info(f"Added {len(valid_files) - count_before} textures from metadata folder")
+                else:
+                    self.log_info("Metadata folder not found on disk")
+
+            # Update cache (always update now, it's safe because of load_all differentiation)
+            TextureCacheManager.update_cache(self.textures_folder, valid_files, load_all=load_all)
+            
             self.root.after(0, lambda: self._on_textures_loaded(valid_files, len(valid_files)))
         except Exception as e:
             print(f"Scan Error: {e}")
@@ -3265,12 +3434,13 @@ class EchoVRTextureViewer:
             # Edit button is handled by display_texture_result to ensure it's loaded
 
     def _on_textures_loaded(self, files, count):
-        self.all_textures = sorted(files)
+        # files is now a list of dicts {"n": name, "f": folder_id}
+        self.all_textures = sorted(files, key=lambda x: x["n"])
         self.filtered_textures = self.all_textures.copy()
         self.file_list.delete(0, tk.END)
         
-        for texture in self.filtered_textures:
-            display_name = self.name_manager.get_name(texture)
+        for texture_data in self.filtered_textures:
+            display_name = self.name_manager.get_name(texture_data["n"])
             self.file_list.insert(tk.END, display_name)
         
         # Cleanup cache to prevent disk bloat
@@ -3298,8 +3468,14 @@ class EchoVRTextureViewer:
             return
 
         index = selection[0]
-        texture_name = self.filtered_textures[index]
-        self.current_texture = os.path.join(self.textures_folder, texture_name)
+        texture_data = self.filtered_textures[index]
+        texture_name = texture_data["n"]
+        folder_id = texture_data["f"]
+        
+        # Resolve path based on folder_id
+        parent_folder = os.path.dirname(self.textures_folder)
+        base_path = os.path.join(parent_folder, folder_id)
+        self.current_texture = os.path.join(base_path, texture_name)
 
         try:
             self.update_canvas_placeholder(self.original_canvas, "Loading texture...")
@@ -3495,11 +3671,16 @@ class EchoVRTextureViewer:
             replacement_size = self.replacement_info.get('file_size')
 
         def do_one(index):
-            texture_name = self.filtered_textures[index]
-            current_texture_path = os.path.join(self.textures_folder, texture_name)
+            texture_data = self.filtered_textures[index]
+            texture_name = texture_data["n"]
+            folder_id = texture_data["f"]
+            
+            parent_folder = os.path.dirname(self.textures_folder)
+            current_texture_path = os.path.join(parent_folder, folder_id, texture_name)
+            
             if self.is_quest_textures:
-                return texture_name, TextureReplacer.replace_quest_texture(self.extracted_folder, self.quest_input_folder, current_texture_path, self.replacement_texture, self.texture_cache)
-            return texture_name, TextureReplacer.replace_pcvr_texture(self.extracted_folder, self.pcvr_input_folder, current_texture_path, self.replacement_texture, replacement_size)
+                return texture_name, TextureReplacer.replace_quest_texture(self.extracted_folder, self.quest_input_folder, current_texture_path, self.replacement_texture, self.texture_cache, source_folder_id=folder_id)
+            return texture_name, TextureReplacer.replace_pcvr_texture(self.extracted_folder, self.pcvr_input_folder, current_texture_path, self.replacement_texture, replacement_size, source_folder_id=folder_id)
 
         results = []
         if len(selection) > 3:
@@ -3530,85 +3711,6 @@ class EchoVRTextureViewer:
         if len(selection) == 1:
             self.on_texture_selected(None)
     
-    def download_textures(self):
-        if self.is_downloading:
-            self.log_info("Download already in progress...")
-            return
-        confirm = messagebox.askyesno("Download Textures", "Download texture cache archive (~400MB)?")
-        if not confirm: return
-        self.is_downloading = True
-        self.download_btn.config(state=tk.DISABLED, text="Downloading...", bg=self.colors['accent_orange'])
-        threading.Thread(target=self._download_worker, daemon=True).start()
-
-    def _download_worker(self):
-        url = "https://github.com/heisthecat31/EchoVR-Texture-Editor/releases/download/quest/texture_cache.zip"
-        if getattr(sys, 'frozen', False):
-             application_path = os.path.dirname(sys.executable)
-        else:
-             application_path = os.path.dirname(os.path.abspath(__file__))
-        # Extract into the persistent settings cache directory and protect existing files
-        extract_to_path = CACHE_DIR
-        temp_zip_path = os.path.join(tempfile.gettempdir(), "texture_cache.zip")
-        try:
-            self.root.after(0, lambda: self.log_info(f"Downloading from: {url}"))
-            urllib.request.urlretrieve(url, temp_zip_path)
-            self.root.after(0, lambda: self.log_info("✓ Download complete. Extracting..."))
-            # Ensure cache dir exists
-            os.makedirs(extract_to_path, exist_ok=True)
-
-            # Safely extract zip entries one-by-one and do NOT overwrite existing files
-            with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
-                for member in zip_ref.infolist():
-                    # Skip directories
-                    if member.is_dir():
-                        continue
-
-                    # Flatten any leading 'texture_cache/' from the zip entry path
-                    member_path = member.filename
-                    if member_path.startswith('texture_cache/'):
-                        member_path = member_path[len('texture_cache/'):]
-                    if member_path.startswith('/') or member_path.startswith('\\') or member_path == '':
-                        continue
-
-                    # Normalize the target path and avoid path traversal
-                    target_path = os.path.normpath(os.path.join(extract_to_path, member_path))
-                    if not target_path.startswith(os.path.normpath(extract_to_path) + os.sep) and os.path.normpath(extract_to_path) != os.path.normpath(target_path):
-                        # Unsafe path - skip
-                        continue
-
-                    target_dir = os.path.dirname(target_path)
-                    if not os.path.exists(target_dir):
-                        try:
-                            os.makedirs(target_dir, exist_ok=True)
-                        except:
-                            pass
-
-                    # If file already exists, skip extracting to avoid overwrite
-                    if os.path.exists(target_path):
-                        continue
-
-                    # Extract this single file
-                    try:
-                        with zip_ref.open(member, 'r') as source, open(target_path, 'wb') as target:
-                            shutil.copyfileobj(source, target)
-                    except Exception:
-                        # If extraction of this member fails, skip it and continue
-                        continue
-            try: os.remove(temp_zip_path)
-            except: pass
-            self.root.after(0, lambda: self._on_download_finished(True, "Texture cache downloaded successfully!"))
-        except Exception as e:
-            self.root.after(0, lambda: self._on_download_finished(False, f"Download failed: {str(e)}"))
-    
-    def _on_download_finished(self, success, message):
-        self.is_downloading = False
-        self.download_btn.config(state=tk.NORMAL, text="Download All Textures", bg=self.colors['accent_blue'])
-        if success:
-            messagebox.showinfo("Success", message)
-            self.log_info(f"✅ {message}")
-        else:
-            messagebox.showerror("Error", message)
-            self.log_info(f"❌ {message}")
 
     # NEW METHODS FOR GRID VIEW
     def open_grid_view(self):
@@ -3618,12 +3720,14 @@ class EchoVRTextureViewer:
         TextureGridPopup(self.root, self, self.filtered_textures, self.textures_folder, self.is_quest_textures)
 
     def select_texture_by_name(self, filename):
-        if filename in self.filtered_textures:
-            idx = self.filtered_textures.index(filename)
-            self.file_list.selection_clear(0, tk.END)
-            self.file_list.selection_set(idx)
-            self.file_list.see(idx)
-            self.on_texture_selected(None)
+        for idx, texture_data in enumerate(self.filtered_textures):
+            name = texture_data["n"] if isinstance(texture_data, dict) else texture_data
+            if name == filename:
+                self.file_list.selection_clear(0, tk.END)
+                self.file_list.selection_set(idx)
+                self.file_list.see(idx)
+                self.on_texture_selected(None)
+                break
 
     def load_all_textures(self):
         if not self.textures_folder or not self.all_textures:
@@ -3644,11 +3748,15 @@ class EchoVRTextureViewer:
         skipped = 0
         success = 0
         
-        for i, texture_name in enumerate(self.all_textures):
+        parent_folder = os.path.dirname(self.textures_folder)
+
+        for i, texture_data in enumerate(self.all_textures):
             if progress.cancel_requested:
                 break
             
-            full_path = os.path.join(self.textures_folder, texture_name)
+            texture_name = texture_data["n"]
+            folder_id = texture_data["f"]
+            full_path = os.path.join(parent_folder, folder_id, texture_name)
             try:
                 # Check if already cached to avoid unnecessary loading/decoding
                 cache_path = TextureLoader.get_cache_path(full_path)
@@ -3670,6 +3778,11 @@ class EchoVRTextureViewer:
             
             if not progress.update(i + 1, total):
                 break
+        
+        # After manual load all is complete, update the "all" cache
+        if not progress.cancel_requested:
+            self.log_info("✓ Manual cache generation complete, updating cache2.json")
+            TextureCacheManager.update_cache(self.textures_folder, self.all_textures, load_all=True)
         
         self.root.after(0, lambda: self._on_load_all_complete(progress, success, skipped, failed))
 
