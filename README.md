@@ -11,5 +11,4 @@ Special thanks to [Goopsie](https://github.com/Goopsie) and [sprockee](https://g
 Here is every texture for cosmetics, use these as your example when creating new cosmetics: [Examples.zip](https://github.com/user-attachments/files/25971111/Examples.zip)
 
 This now works with quest standalone, download quest data from [data](https://mia.cdn.echo.taxi/_data.zip).
-[<img width="1199" height="798" alt="Screenshot (413)" src="https://github.com/user-attachments/assets/21e6f2fd-55ae-4a17-a50a-d1230cba6e9b" />
-](https://github.com/EchoTools/EchoVR-Texture-Editor/blob/82014f796e333eb01891106fb9a53cb262272a11/Screenshot%20(459).png)
+<img width="1197" height="796" alt="Screenshot (459)" src="https://github.com/user-attachments/assets/00ef7075-2f60-453e-9f45-cb0b776f1a27" />
