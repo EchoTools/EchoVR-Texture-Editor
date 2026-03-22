@@ -84,7 +84,7 @@ QUEST_TEXTURE_ID = "489bb35d53ca50e9"
 QUEST_METADATA_ID = "e2efe7289d5985b8"
 
 # App version for updates
-APP_VERSION = "15.0.0"
+APP_VERSION = "16.0.0"
 GITHUB_REPO = "heisthecat31/EchoVR-Texture-Editor"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
