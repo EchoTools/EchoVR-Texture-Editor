@@ -2493,9 +2493,12 @@ class EchoVRTextureViewer:
         self.check_updates_btn = tk.Button(header_frame, text="🔄 Check Updates", command=self.check_app_updates, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=12, pady=8)
         self.check_updates_btn.pack(side=tk.LEFT, padx=(0, 10))
         
-        title_label = tk.Label(header_frame, text="ECHO VR TEXTURE EDITOR", font=("Arial", 16, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'])
-        title_label.pack(side=tk.LEFT, expand=True)
+        self.view_mods_btn = tk.Button(header_frame, text="👁 View Mods", command=self.view_modifications, bg='#4cd964', fg='#000000', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=8)
+        self.view_mods_btn.pack(side=tk.RIGHT, padx=(10, 0))
+        ToolTip(self.view_mods_btn, "View and manage all files currently staged as modifications.")
 
+        title_label = tk.Label(header_frame, text="ECHO VR TEXTURE EDITOR", font=("Arial", 16, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'])
+        title_label.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
 
         self.share_mods_btn = tk.Button(header_frame, text="📤 Share Mods", command=self.share_modifications, bg='#4cd964', fg='#000000', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=8)
         self.share_mods_btn.pack(side=tk.RIGHT, padx=(10, 0))
@@ -2631,11 +2634,7 @@ class EchoVRTextureViewer:
         action_frame = tk.Frame(button_panel, bg=self.colors['bg_dark'])
         action_frame.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.view_mods_btn = tk.Button(action_frame, text="View existing modifications", command=self.view_modifications, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5)
-        self.view_mods_btn.pack(side=tk.LEFT, padx=5)
-        ToolTip(self.view_mods_btn, "View and manage all files currently staged as modifications.")
-        
-        self.replace_btn = tk.Button(action_frame, text="Replace Texture", command=self.replace_texture, bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5, state=tk.DISABLED)
+        self.replace_btn = tk.Button(action_frame, text="Replace Texture", command=self.replace_texture, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5, state=tk.DISABLED)
         self.replace_btn.pack(side=tk.LEFT, padx=5)
         ToolTip(self.replace_btn, "Apply the replacement image to the selected texture.")
         
