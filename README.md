@@ -10,5 +10,7 @@ Special thanks to [Goopsie](https://github.com/Goopsie) and [sprockee](https://g
 
 Here is every texture for cosmetics, use these as your example when creating new cosmetics: [Examples.zip](https://github.com/user-attachments/files/25971111/Examples.zip)
 
+[Tutorial](https://youtu.be/iEeCr-4pQJA?si=VpUQGNr38H1gbwG2)
+
 This now works with quest standalone, download quest data from [data](https://mia.cdn.echo.taxi/_data.zip).
 <img width="1197" height="796" alt="Screenshot (459)" src="https://github.com/user-attachments/assets/00ef7075-2f60-453e-9f45-cb0b776f1a27" />
